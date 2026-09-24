@@ -547,6 +547,12 @@ function closeInstallPanel() {
   $('sidebar-default-view').classList.remove('hidden');
 }
 
+// 只收起下面的案場詳情，列表與搜尋條件維持原樣，列表區還原成整頁高度
+function closeInstallDetail() {
+  $('install-panel').classList.remove('has-detail');
+  $('install-detail').classList.add('hidden');
+}
+
 async function runInstallSearch(q) {
   const results = await call(window.api.eip.searchInstallLists(q), (err) => {
     $('install-search-results').innerHTML = `<p style="color:#d84f4f;">搜尋失敗：${err}</p>`;
@@ -2245,6 +2251,7 @@ $('btn-test-connection').addEventListener('click', testConnection);
 $('btn-login').addEventListener('click', doLogin);
 $('btn-open-install-search').addEventListener('click', openInstallPanel);
 $('btn-install-back').addEventListener('click', closeInstallPanel);
+$('btn-install-detail-close').addEventListener('click', closeInstallDetail);
 $('btn-open-ticket-search').addEventListener('click', () => openTicketSearchPanel());
 $('btn-ticket-search-back').addEventListener('click', closeTicketSearchPanel);
 $('btn-ticket-search-detail-close').addEventListener('click', closeTicketSearchDetail);
