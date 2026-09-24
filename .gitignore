@@ -1,0 +1,37 @@
+# 依賴與建置輸出
+node_modules/
+dist/
+out/
+release/
+build/
+
+# 日誌(含 start-hidden.bat 產生的 start-out.log / start-err.log)
+*.log
+logs/
+npm-debug.log*
+
+# 環境變數 / 本機設定
+.env
+.env.*
+!.env.example
+
+# 快取
+.cache/
+.eslintcache
+*.tsbuildinfo
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 作業系統
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Claude Code 本機設定
+.claude/settings.local.json

@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>EIP工單小工具</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app-notification" class="app-notification hidden">
+    <div>
+      <strong id="app-notification-title"></strong>
+      <div id="app-notification-body"></div>
+    </div>
+    <button id="btn-close-app-notification" type="button" title="關閉通知">✕</button>
+  </div>
+  <header id="topbar">
+    <h1>我的工單</h1>
+    <div class="topbar-actions">
+      <button id="btn-open-ticket-search" title="搜尋全部工單">工單查詢</button>
+      <button id="btn-open-install-search" title="查詢案場裝機單">裝機單查詢</button>
+      <span id="refresh-countdown" class="refresh-countdown"></span>
+      <button id="btn-refresh" title="重新整理工單／信箱／行事曆">重新整理</button>
+      <button id="btn-settings" title="設定">設定</button>
+    </div>
+  </header>
+
+  <section id="settings-panel" class="panel hidden">
+    <h2>設定</h2>
+    <label>EIP API網址(如 http://eip.company.local/api/v1)
+      <input type="text" id="set-eip-url" />
+    </label>
+    <fieldset>
+      <legend>用EIP帳號密碼登入取得Token(推薦，不用再麻煩管理員在伺服器上跑指令)</legend>
+      <label>EIP帳號
+        <input type="text" id="login-username" placeholder="跟登入EIP網頁一樣的帳號" />
+      </label>
+      <label>EIP密碼
+        <input type="password" id="login-password" />
+      </label>
+      <div class="actions">
+        <button id="btn-login" type="button">登入並取得Token</button>
+      </div>
+      <p id="login-message" style="color:#2f6fd8;"></p>
+    </fieldset>
+    <label>API Token(登入成功會自動帶入，也可以手動貼上)
+      <input type="password" id="set-api-token" />
+    </label>
+    <label>預設Git路徑(找不到專案對應設定時使用)
+      <input type="text" id="set-git-path" placeholder="例如 D:\www56\nsst" />
+    </label>
+    <label>喚出視窗快捷鍵
+      <input type="text" id="set-hotkey" placeholder="點一下這裡，再直接按下想要的按鍵組合" readonly />
+      <button id="btn-clear-hotkey" type="button">清除</button>
+    </label>
+    <p id="hotkey-active-hint" style="color:#888;margin-top:-4px;"></p>
+    <fieldset>
+      <legend>LLM設定</legend>
+      <label>供應商
+        <select id="set-llm-provider">
+          <option value="ollama">Ollama(本地/內網)</option>
+          <option value="deepseek">DeepSeek(雲端API)</option>
+        </select>
+      </label>
+      <label>Base URL
+        <input type="text" id="set-llm-baseurl" placeholder="http://localhost:11434/v1" />
+      </label>
+      <label>API Key(Ollama可留任意字串)
+        <input type="password" id="set-llm-apikey" />
+      </label>
+      <label>模型名稱
+        <input type="text" id="set-llm-model" placeholder="qwen2.5-coder" />
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>信箱設定(收件匣顯示用，IMAP)</legend>
+      <label>帳號(email)
+        <input type="text" id="set-mail-username" placeholder="cliff_yang@nsst.com.tw" />
+      </label>
+      <label>密碼
+        <input type="password" id="set-mail-password" />
+      </label>
+      <label>IMAP主機
+        <input type="text" id="set-mail-imap-host" placeholder="mail.nsst.com.tw" />
+      </label>
+      <label>連接埠
+        <input type="text" id="set-mail-imap-port" placeholder="993" />
+      </label>
+      <label><input type="checkbox" id="set-mail-imap-insecure" style="width:auto;display:inline-block;" />
+        信任自簽憑證(公司內部信箱若跳TLS錯誤才勾選，勾選後憑證不再被驗證，僅限已知安全的內網主機)
+      </label>
+      <div class="actions">
+        <button id="btn-test-mail" type="button">測試信箱連線</button>
+      </div>
+      <label>CalDAV行事曆伺服器網址(同事都填同一個網址即可，不用填自己專屬的路徑)
+        <input type="text" id="set-mail-calendar-url" placeholder="例如 https://mail.nsst.com.tw:667" />
+      </label>
+      <p style="color:#888;font-size:11px;">系統會用你上面填的帳號密碼，自動找出你自己名下、以及別人分享給你的所有行事曆，不用另外設定</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>回覆範本(依工單類型分開設定，只是給你參考的文字架構，不會自動送出)</legend>
+      <label>Bug回報
+        <textarea id="tpl-bug" rows="4" placeholder="例如：根因：\n處理方式：\n如何避免：\n測試結果："></textarea>
+      </label>
+      <label>新增需求
+        <textarea id="tpl-feature" rows="4" placeholder="例如：需求說明：\n實作方式：\n測試方式："></textarea>
+      </label>
+      <label>優化調整
+        <textarea id="tpl-optimize" rows="4" placeholder="例如：優化項目：\n調整內容：\n影響範圍："></textarea>
+      </label>
+      <label>詢問／諮詢
+        <textarea id="tpl-inquiry" rows="4" placeholder="例如：確認結果：\n後續建議："></textarea>
+      </label>
+      <label>其他
+        <textarea id="tpl-other" rows="4"></textarea>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>專案Git路徑管理(集中查看/編輯所有專案的路徑設定，跟在工單詳情頁編輯是同一份資料)</legend>
+      <div id="project-paths-list"></div>
+      <p style="color:#888;font-size:11px;">要新增新的專案路徑，到該專案任一張工單的詳情頁設定即可，這裡主要是方便統一查看/修改/刪除</p>
+    </fieldset>
+
+    <div class="actions">
+      <button id="btn-save-settings">儲存設定</button>
+      <button id="btn-test-connection">測試EIP連線</button>
+    </div>
+    <p id="settings-message"></p>
+  </section>
+
+  <main id="main-panel">
+    <div id="home-view" class="home-grid">
+      <div class="home-main">
+        <div id="ticket-list-view">
+          <div id="ticket-tabs" class="ticket-tabs">
+            <button class="tab-btn active" data-tab="normal">待處理<span class="tab-count" id="tab-count-normal"></span></button>
+            <button class="tab-btn" data-tab="qc">品保中<span class="tab-count" id="tab-count-qc"></span></button>
+          </div>
+          <input type="text" id="ticket-search" placeholder="搜尋工單編號／摘要／專案名稱..." class="search-box" />
+          <section id="ticket-list"></section>
+
+          <section id="batch-bar" class="hidden">
+            <span id="batch-bar-text"></span>
+            <button id="btn-batch-open">批次提交所選工單</button>
+            <button id="btn-batch-clear">取消選取</button>
+          </section>
+        </div>
+
+        <section id="ticket-detail" class="content-view hidden">
+          <button id="btn-back">← 返回清單</button>
+          <h2 id="detail-title"></h2>
+          <p><span class="ticket-id" id="detail-id"></span> <button id="btn-copy-id">複製工單號</button> <button id="btn-view-ticket-full" title="在右側顯示這張工單的完整資訊(欄位、描述、附件、全部回覆)">查看工單詳情</button></p>
+          <p id="detail-project"></p>
+          <button id="btn-jump-to-site" class="hidden">查看這個專案的案場/裝機單資訊</button>
+          <label>這個專案的本地Git路徑(存在settings，同一個專案的其他工單共用；也可以到「設定」的「專案Git路徑」統一管理)
+            <input type="text" id="detail-project-path" placeholder="例如 D:\www56\nsst" />
+            <button id="btn-save-project-path">儲存</button>
+          </label>
+          <label>工單類型(僅本地保存，不會回寫EIP；開單人分類常常不準，這裡讓你自己修正，用來決定AI產生回覆時的寫法)
+            <select id="ticket-type-select">
+              <option value="">未分類</option>
+              <option value="bug">Bug回報</option>
+              <option value="feature">新增需求</option>
+              <option value="optimize">優化調整</option>
+              <option value="inquiry">詢問／諮詢</option>
+              <option value="other">其他</option>
+            </select>
+            <span id="ticket-type-eip-hint" class="meta"></span>
+          </label>
+          <div class="detail-desc" id="detail-description"></div>
+
+          <div id="detail-attachments-box" class="panel-box">
+            <strong>附件</strong>
+            <div id="detail-attachments-list"></div>
+          </div>
+
+          <p id="not-own-notice" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;">
+            這張工單不是指派給你的，只能查看，不能回覆或計時
+          </p>
+
+          <div id="reply-section">
+            <div id="timer-box" class="timer-box">
+              <div class="timer-row">
+                <div class="timer-display" id="timer-display">00:00:00</div>
+                <div class="timer-controls">
+                  <button id="btn-timer-start">開始</button>
+                  <button id="btn-timer-pause">暫停</button>
+                  <button id="btn-timer-stop">停止</button>
+                  <button id="btn-timer-manual-toggle" type="button">手動設定時間</button>
+                </div>
+              </div>
+              <p id="timer-manual-summary" class="meta hidden"></p>
+              <div id="timer-manual-form" class="hidden">
+                <p class="meta">工單是完成後才補開時，可直接填工作的起訖時間與實際用時(用時可以比「結束−開始」短，例如中間有休息)。送出回覆時會以這裡的設定為準。</p>
+                <div class="manual-grid">
+                  <label>開始時間 <input type="datetime-local" id="manual-start" /></label>
+                  <label>結束時間 <input type="datetime-local" id="manual-end" /></label>
+                  <label>用時
+                    <span class="manual-duration"><input type="number" id="manual-hours" min="0" step="1" /> 小時 <input type="number" id="manual-minutes" min="0" max="59" step="1" /> 分</span>
+                  </label>
+                </div>
+                <div class="actions">
+                  <button id="btn-manual-apply" type="button">套用</button>
+                  <button id="btn-manual-clear" type="button">清除手動設定</button>
+                  <button id="btn-manual-cancel" type="button">收起</button>
+                </div>
+                <p id="timer-manual-message" class="meta"></p>
+              </div>
+            </div>
+
+            <div class="ai-box">
+              <div class="git-source-toggle">
+                <label><input type="radio" name="git-source-mode" id="git-mode-uncommitted" value="uncommitted" checked /> 尚未提交的變更(目前diff)</label>
+                <label><input type="radio" name="git-source-mode" id="git-mode-commits" value="commits" /> 已提交的commit(可多選)</label>
+              </div>
+              <div id="git-commits-box" class="hidden">
+                <button id="btn-load-commits" type="button">載入近期提交紀錄</button>
+                <div id="git-commits-list"></div>
+              </div>
+              <label>額外說明／參考(選填，會融合進AI產生的回覆與commit訊息中)
+                <textarea id="git-extra-note" rows="3" placeholder="例如：這次同時處理了A、B兩個狀況，B是順手修的..."></textarea>
+              </label>
+              <button id="btn-generate">依上面選擇用AI產生回覆／commit訊息</button>
+              <p id="ai-status"></p>
+            </div>
+
+            <div class="upload-box">
+              <button id="btn-pick-attach-file">選擇檔案上傳並附加到工單</button>
+              <span id="pending-files-text" style="color:#888;font-size:12px;"></span>
+            </div>
+
+            <label>工單回覆內容
+              <textarea id="reply-info" rows="8"></textarea>
+            </label>
+            <div class="actions">
+              <button id="btn-apply-template" type="button">依工單類型套用回覆範本</button>
+            </div>
+            <label>Commit訊息(產生後可直接複製去 git commit，或用下方按鈕直接由本工具執行)
+              <input type="text" id="reply-commit-message" readonly />
+              <button id="btn-copy-commit">複製</button>
+            </label>
+            <div class="actions">
+              <button id="btn-do-git-commit" type="button" class="hidden">確認：用這個訊息執行 git commit</button>
+              <span id="git-commit-status" class="meta"></span>
+            </div>
+            <label>標記狀態
+              <select id="reply-status"></select>
+            </label>
+            <label id="reply-transfer-to-label" class="hidden">轉單對象
+              <select id="reply-transfer-to">
+                <option value="quality_assurance">品保</option>
+                <option value="service">客服</option>
+                <option value="">不轉單</option>
+              </select>
+            </label>
+
+            <div class="actions">
+              <button id="btn-submit-reply">送出回覆</button>
+            </div>
+          </div>
+          <p id="detail-message"></p>
+        </section>
+
+        <section id="batch-panel" class="content-view hidden">
+          <button id="btn-batch-back">← 返回清單</button>
+          <h2>批次提交</h2>
+          <p id="batch-panel-list"></p>
+          <p style="color:#888;">批次提交會套用同一份回覆內容與狀態到每一張工單，但每張工單各自的計時紀錄不受影響、會各自結算。</p>
+          <label>共用回覆內容
+            <textarea id="batch-reply-info" rows="8"></textarea>
+          </label>
+          <label>標記狀態
+            <select id="batch-reply-status">
+              <option value="7">追蹤中(尚未完成，先回報進度)</option>
+              <option value="3">暫停</option>
+              <option value="2">完成</option>
+              <option value="10">完成並轉品保(任務品保中，已轉單待安排後續)</option>
+            </select>
+          </label>
+          <label id="batch-transfer-to-label" class="hidden">轉單對象
+            <select id="batch-reply-transfer-to">
+              <option value="quality_assurance">品保</option>
+              <option value="service">客服</option>
+              <option value="">不轉單</option>
+            </select>
+          </label>
+          <div class="actions">
+            <button id="btn-batch-submit">全部送出</button>
+          </div>
+          <p id="batch-message"></p>
+        </section>
+      </div>
+      <div class="home-sidebar">
+        <div id="sidebar-default-view">
+          <div class="mail-todo-grid">
+          <section id="mail-panel" class="panel-box">
+            <div class="mail-panel-header">
+              <h2>信箱<span id="mail-unread-badge" class="hidden"></span></h2>
+            </div>
+            <div id="mail-list"></div>
+          </section>
+
+          <section id="todo-panel" class="panel-box">
+            <div class="mail-panel-header">
+              <h2>待辦事項</h2>
+              <div>
+                <button id="btn-todo-history" title="查詢已完成的歷史待辦">歷史紀錄</button>
+                <button id="btn-add-todo">+ 新增</button>
+              </div>
+            </div>
+            <div id="todo-form" class="todo-form hidden">
+              <input type="hidden" id="todo-edit-id" />
+              <input type="text" id="todo-title" placeholder="待辦事項" />
+              <input type="datetime-local" id="todo-reminder" title="提醒時間" />
+              <label class="todo-pin-input"><input type="checkbox" id="todo-pinned" /> 置頂</label>
+              <button id="btn-save-todo" type="button">儲存</button>
+              <button id="btn-cancel-todo" type="button">取消</button>
+            </div>
+            <p id="todo-message" class="todo-message"></p>
+            <div id="todo-list"></div>
+          </section>
+          </div>
+
+          <section id="calendar-panel" class="panel-box">
+            <div class="mail-panel-header">
+              <h2 id="calendar-month-label"></h2>
+              <div class="calendar-nav">
+                <button id="btn-calendar-prev" title="上個月">‹</button>
+                <button id="btn-calendar-today">今天</button>
+                <button id="btn-calendar-next" title="下個月">›</button>
+              </div>
+            </div>
+            <div id="calendar-legend"></div>
+            <div id="calendar-grid" class="calendar-grid"></div>
+            <div id="calendar-day-events"></div>
+            <div class="add-event-box">
+              <button id="btn-toggle-add-event">+ 新增事件</button>
+              <div id="add-event-form" class="hidden">
+                <input type="text" id="new-event-title" placeholder="事件標題" />
+                <label style="display:inline-block;width:auto;"><input type="checkbox" id="new-event-allday" style="width:auto;" checked /> 全天</label>
+                <input type="time" id="new-event-time" value="09:00" />
+                <div class="actions">
+                  <button id="btn-submit-new-event">新增</button>
+                  <button id="btn-delete-event" class="hidden" style="color:#c94f4f;">刪除這筆事件</button>
+                  <button id="btn-cancel-event">取消</button>
+                </div>
+                <p id="add-event-message" style="color:#888;font-size:11px;"></p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <section id="install-panel" class="panel-box content-view hidden">
+          <div class="mail-panel-header">
+            <h2>裝機單查詢</h2>
+            <button id="btn-install-back">返回信箱／行事曆</button>
+          </div>
+          <input type="text" id="install-search" class="search-box" placeholder="搜尋案場名稱／代碼／地址／聯絡人..." />
+          <div id="install-search-results"></div>
+
+          <div id="install-detail" class="hidden">
+            <hr />
+            <h3 id="install-detail-name"></h3>
+            <div id="install-detail-basic" class="info-grid"></div>
+            <h4>連線設定</h4>
+            <div id="install-detail-connection"></div>
+            <p id="install-ping-result" style="color:#888;"></p>
+            <h4>相關工單(最近20筆)</h4>
+            <div id="install-detail-tickets"></div>
+          </div>
+        </section>
+
+        <section id="ticket-search-panel" class="panel-box content-view hidden">
+          <div class="mail-panel-header">
+            <h2>工單查詢</h2>
+            <button id="btn-ticket-search-back">返回信箱／行事曆</button>
+          </div>
+          <div class="ts-search-row">
+            <input type="text" id="ticket-search-query" class="search-box" placeholder="搜尋工單編號／摘要／專案名稱..." />
+            <div id="adv-chips-row" class="adv-chips-row hidden"></div>
+            <button id="btn-toggle-adv-search" type="button" class="adv-toggle-btn">進階搜尋 ▾</button>
+          </div>
+
+          <div id="ticket-adv-filters" class="adv-filters hidden">
+            <div class="adv-row">
+              <label>關鍵字</label>
+              <input type="text" id="adv-keyword" placeholder="輸入關鍵字...（比對範圍見下方「搜尋範圍」）" />
+            </div>
+
+            <div class="adv-row adv-row-wrap">
+              <label>搜尋範圍</label>
+              <div id="adv-fields" class="adv-checkbox-group"></div>
+            </div>
+
+            <div class="adv-row">
+              <label>案場</label>
+              <div class="adv-site-picker">
+                <input type="text" id="adv-site-input" placeholder="輸入案場名稱／代碼搜尋..." autocomplete="off" />
+                <div id="adv-site-results" class="adv-site-results hidden"></div>
+              </div>
+              <span id="adv-site-selected" class="adv-chip hidden"></span>
+            </div>
+
+            <div class="adv-row">
+              <label>工單號</label>
+              <input type="number" id="adv-id-from" class="adv-num" placeholder="從" min="1" />
+              <span>～</span>
+              <input type="number" id="adv-id-to" class="adv-num" placeholder="到" min="1" />
+            </div>
+
+            <div class="adv-row">
+              <label>時間範圍</label>
+              <select id="adv-date-field"></select>
+              <input type="date" id="adv-date-from" />
+              <span>～</span>
+              <input type="date" id="adv-date-to" />
+            </div>
+
+            <div class="adv-row adv-row-wrap">
+              <label>狀態</label>
+              <div id="adv-statuses" class="adv-checkbox-group"></div>
+            </div>
+
+            <div class="adv-row adv-row-wrap">
+              <label>種類</label>
+              <div id="adv-categories" class="adv-checkbox-group"></div>
+            </div>
+
+            <div class="adv-row">
+              <label>負責人員</label>
+              <input type="text" id="adv-assignee-name" placeholder="姓名關鍵字" />
+              <label>反應人</label>
+              <input type="text" id="adv-reporter-name" placeholder="姓名關鍵字" />
+            </div>
+
+            <div class="adv-row">
+              <label>排序</label>
+              <select id="adv-order-by">
+                <option value="id">工單號</option>
+                <option value="created_at">建立時間</option>
+                <option value="updated_at">更新時間</option>
+                <option value="start_time">開始時間</option>
+                <option value="end_time">結束時間</option>
+                <option value="status">狀態</option>
+              </select>
+              <select id="adv-order-dir">
+                <option value="desc">新到舊／大到小</option>
+                <option value="asc">舊到新／小到大</option>
+              </select>
+            </div>
+
+            <div class="adv-row adv-actions">
+              <button id="btn-adv-search" type="button">套用篩選</button>
+              <button id="btn-adv-clear" type="button">清除條件</button>
+            </div>
+          </div>
+
+          <div id="ticket-search-results"></div>
+          <div id="ticket-search-pagination" class="ts-pagination hidden">
+            <button id="btn-ts-prev-page" type="button">‹ 上一頁</button>
+            <span id="ts-page-info"></span>
+            <button id="btn-ts-next-page" type="button">下一頁 ›</button>
+          </div>
+
+          <div id="ticket-search-detail" class="hidden">
+            <div class="ts-detail-divider">
+              <span>▾ 工單詳情</span>
+              <button id="btn-ticket-search-detail-close" type="button">✕ 關閉詳情，回到列表</button>
+            </div>
+            <h2 id="ticket-search-detail-title"></h2>
+            <p id="ticket-search-not-own" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;margin:0 0 8px;">
+              這張工單不是指派給你的，僅供查詢檢視
+            </p>
+            <div id="ticket-search-detail-basic" class="info-grid wide-label"></div>
+            <h4>說明</h4>
+            <div id="ticket-search-detail-desc" class="detail-desc"></div>
+            <h4>附件</h4>
+            <div id="ticket-search-detail-attachments"></div>
+            <h4>回覆記錄<span id="ticket-search-reply-count" class="meta"></span></h4>
+            <div id="ticket-search-detail-replies"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div id="image-preview-backdrop" class="modal-backdrop hidden">
+      <div class="modal-box image-preview-box">
+        <div class="modal-header">
+          <h2 id="image-preview-title"></h2>
+          <button id="btn-image-preview-open" title="用瀏覽器開啟">↗</button>
+          <button id="btn-image-preview-close">✕</button>
+        </div>
+        <div class="image-preview-wrap">
+          <img id="image-preview-img" alt="">
+          <video id="image-preview-video" controls class="hidden"></video>
+        </div>
+      </div>
+    </div>
+
+    <div id="todo-history-backdrop" class="modal-backdrop hidden">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h2>已完成待辦歷史</h2>
+          <button id="btn-todo-history-close">✕</button>
+        </div>
+        <input type="text" id="todo-history-search" class="search-box" placeholder="搜尋待辦內容..." />
+        <div id="todo-history-list" style="overflow-y:auto;max-height:60vh;margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <div id="mail-modal-backdrop" class="modal-backdrop hidden">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h2 id="mail-modal-subject"></h2>
+          <button id="btn-mail-modal-close">✕</button>
+        </div>
+        <p id="mail-modal-meta" class="meta"></p>
+        <div id="mail-modal-body-wrap">
+          <iframe id="mail-modal-frame" sandbox=""></iframe>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

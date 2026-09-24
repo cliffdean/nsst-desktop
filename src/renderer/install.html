@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>裝機單查詢</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <h1>裝機單查詢</h1>
+  </header>
+
+  <main id="install-main">
+    <input type="text" id="install-search" class="search-box" placeholder="搜尋案場名稱／代碼／地址／聯絡人..." autofocus />
+    <div id="install-search-results"></div>
+
+    <div id="install-detail" class="hidden">
+      <hr />
+      <h2 id="install-detail-name"></h2>
+      <div id="install-detail-basic" class="info-grid"></div>
+
+      <h3>連線設定</h3>
+      <div id="install-detail-connection" class="panel-box"></div>
+      <p id="install-ping-result" style="color:#888;"></p>
+
+      <h3>相關工單(最近20筆)</h3>
+      <div id="install-detail-tickets"></div>
+    </div>
+  </main>
+
+  <script src="install-renderer.js"></script>
+</body>
+</html>

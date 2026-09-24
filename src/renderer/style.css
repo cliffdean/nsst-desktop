@@ -1,0 +1,599 @@
+* { box-sizing: border-box; font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: #f4f5f7;
+  color: #1f2430;
+  font-size: 13px;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.app-notification {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(360px, calc(100vw - 28px));
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid #2f6fd8;
+  border-left: 4px solid #2f6fd8;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(31, 36, 48, 0.2);
+}
+.app-notification strong { display: block; margin-bottom: 4px; }
+.app-notification button { border: none; background: transparent; padding: 0 2px; font-size: 14px; }
+
+#topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #2f6fd8;
+  color: #fff;
+}
+#settings-panel { flex: none; max-height: 60vh; overflow-y: auto; }
+#topbar h1 { font-size: 15px; margin: 0; }
+.topbar-actions { display: flex; align-items: center; }
+.topbar-actions button {
+  margin-left: 6px;
+}
+.refresh-countdown {
+  margin-left: 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.75);
+  min-width: 34px;
+  text-align: right;
+}
+
+button {
+  border: 1px solid #cfd4dc;
+  background: #fff;
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+button:hover { background: #eef1f6; }
+
+.hidden { display: none !important; }
+
+.panel {
+  padding: 12px 14px;
+  background: #fff;
+  border-bottom: 1px solid #e2e5ea;
+}
+/* 表單欄位樣式不是只有設定頁在用，工單詳情/批次提交/裝機單這幾個內容區塊也都要套用，
+   不然label/input/select只剩瀏覽器最陽春的樣式，會看起來很單調、擠成一團 */
+.panel label, .content-view label {
+  display: block;
+  margin: 12px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+}
+.panel input, .panel select, textarea,
+.content-view input, .content-view select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #cfd4dc;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: normal;
+  background: #fff;
+}
+.panel input:focus, .panel select:focus, textarea:focus,
+.content-view input:focus, .content-view select:focus {
+  outline: none;
+  border-color: #2f6fd8;
+  box-shadow: 0 0 0 2px rgba(47, 111, 216, 0.15);
+}
+fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
+
+/* 內容區塊(工單詳情/批次提交)統一的間距與標題樣式，取代原本擠在一起的陽春排版 */
+.content-view { padding: 14px; }
+.content-view h2 { font-size: 16px; margin: 0 0 4px; }
+.content-view h3, .content-view h4 { font-size: 13px; color: #556; margin: 18px 0 6px; padding-top: 10px; border-top: 1px solid #eef0f3; }
+.content-view > button:first-child { margin-bottom: 10px; }
+.content-view .meta { color: #888; font-size: 12px; }
+
+#set-hotkey { width: calc(100% - 60px); display: inline-block; cursor: pointer; background: #fafbfc; }
+#set-hotkey:focus { outline: 2px solid #2f6fd8; background: #fff; }
+#btn-clear-hotkey { width: 52px; margin-left: 4px; vertical-align: top; }
+.actions { margin-top: 10px; display: flex; gap: 8px; }
+
+.project-path-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.project-path-id { flex: 0 0 auto; font-size: 12px; color: #556; white-space: nowrap; min-width: 90px; }
+.project-path-input { flex: 1 1 auto; }
+.project-path-row button { flex: 0 0 auto; }
+
+#main-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* home-view吃滿main-panel剩餘高度；ticket-list-view/ticket-detail/batch-panel
+   則是home-main裡「目前顯示的畫面」三選一，一樣吃滿高度、自己內部捲動 */
+#home-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+#ticket-list-view, #ticket-detail, #batch-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#ticket-detail, #batch-panel { overflow-y: auto; }
+
+/* 裝機單查詢顯示在右側欄，跟信箱/行事曆二選一切換，左邊工單清單一直保持可見 */
+#install-panel { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+/* 還沒選案場時，搜尋結果吃滿整個高度方便瀏覽；選了案場後才縮小、把空間讓給詳細內容 */
+#install-search-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#install-detail { overflow-y: auto; }
+#install-panel.has-detail #install-search-results { flex: 0 0 auto; max-height: 190px; }
+#install-panel.has-detail #install-detail { flex: 1 1 auto; min-height: 0; }
+
+/* 工單查詢顯示在右側欄，跟信箱/行事曆/裝機單互斥切換，左邊工單清單一直保持可見 */
+#ticket-search-panel { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+#ticket-search-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#ticket-search-detail { overflow-y: auto; }
+#ticket-search-panel.has-detail #ticket-search-results { flex: 0 0 auto; max-height: 190px; }
+#ticket-search-panel.has-detail #ticket-search-detail { flex: 1 1 auto; min-height: 0; }
+
+/* 上面搜尋列表跟下面工單詳情本來只靠一條細細的<hr>分隔，很容易看錯以為是同一區塊，
+   改用一整條有底色、貼齊左右邊界的分隔列，並附上「關閉詳情」按鈕方便一鍵回到整頁列表 */
+.ts-detail-divider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 -14px 12px;
+  padding: 8px 14px;
+  background: #eef2f8;
+  border-top: 3px solid #2f6fd8;
+  border-bottom: 1px solid #dde3ec;
+  font-size: 12px;
+  font-weight: 600;
+  color: #46618c;
+  /* 分隔列本身在#ticket-search-detail(可捲動區)裡面，捲動內容時要黏在該捲動容器頂端，
+     不然滾下去看回覆記錄時分隔列會被捲出畫面，又分不出列表跟詳情的界限 */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+.ts-detail-divider button {
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.install-card {
+  background: #fff;
+  border: 1px solid #e2e5ea;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.install-card:hover { border-color: #2f6fd8; }
+.install-card .install-name { font-weight: 600; }
+
+.info-grid { display: grid; grid-template-columns: 64px 1fr; gap: 4px 8px; font-size: 12px; margin: 6px 0 10px; }
+.info-label { color: #888; }
+.info-value { word-break: break-word; white-space: pre-wrap; }
+.info-grid.wide-label { grid-template-columns: 84px 1fr; }
+
+/* 工單查詢結果卡片：欄位對齊EIP總表，一行放一組「標籤:值」 */
+.ts-card-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; font-size: 12px; color: #555; }
+.ts-card-meta .ts-k { color: #999; }
+.ts-progress { font-size: 11px; padding: 0 6px; border-radius: 8px; background: #eef1f6; color: #667; }
+.ts-progress.good { background: #e4f4ea; color: #2f8a4f; }
+.ts-progress.bad { background: #fbe6e6; color: #c94f4f; }
+
+/* 回覆記錄 */
+.ts-reply { background: #fff; border: 1px solid #e2e5ea; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.ts-reply-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: #667; margin-bottom: 4px; }
+.ts-reply-head strong { color: #222; }
+.ts-reply-work { font-size: 12px; color: #888; margin-bottom: 4px; }
+.ts-reply-body { font-size: 13px; word-break: break-word; overflow-wrap: anywhere; }
+.ts-reply-body p { margin: 0 0 6px; }
+/* 回覆/說明常是從EIP網頁貼上的HTML，會帶著行內樣式(width: 955px; float: left; position...)把窄欄撐破，
+   行內樣式只能用!important蓋掉：一律不浮動、不定寬、不超出容器 */
+.ts-reply-body *, #ticket-search-detail-desc * {
+  max-width: 100% !important;
+  width: auto !important;
+  min-width: 0 !important;
+  float: none !important;
+  position: static !important;
+  box-sizing: border-box;
+}
+.ts-reply-body img, #ticket-search-detail-desc img { height: auto !important; }
+.ts-reply-body pre, #ticket-search-detail-desc pre { white-space: pre-wrap; overflow-x: auto; }
+.ts-reply-body table, #ticket-search-detail-desc table { display: block; overflow-x: auto; }
+#ticket-search-detail { overflow-x: hidden; }
+#ticket-search-detail-replies, .ts-reply { min-width: 0; }
+.ts-severity-0 { color: #c94f4f; font-weight: 600; }
+.ts-severity-1 { color: #b6720c; font-weight: 600; }
+
+.conn-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+.conn-table th, .conn-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid #eef0f3;
+  text-align: left;
+  word-break: break-word;
+}
+.conn-table th { color: #888; font-weight: 600; font-size: 11px; }
+.conn-table td:first-child { color: #888; white-space: nowrap; width: 1%; }
+.conn-table .copy-cell { font-family: monospace; cursor: pointer; border-radius: 3px; }
+.conn-table .copy-cell:hover { background: #eef4ff; color: #2f6fd8; }
+.conn-table button { padding: 2px 7px; font-size: 11px; margin-right: 4px; }
+.mini-ticket-row { font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f1f3; }
+.mini-ticket-link { cursor: pointer; color: #2f6fd8; }
+.mini-ticket-link:hover { text-decoration: underline; }
+
+.home-grid {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+.home-main { min-height: 0; display: flex; flex-direction: column; }
+#ticket-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.home-sidebar { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.mail-todo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mail-todo-grid .panel-box { min-width: 0; margin-bottom: 0; }
+@media (max-width: 760px) {
+  .home-grid { grid-template-columns: 1fr; height: auto; }
+  .home-main, .home-sidebar { overflow-y: visible; }
+  #ticket-list { overflow-y: visible; }
+  .mail-todo-grid { grid-template-columns: 1fr; }
+}
+
+.panel-box {
+  background: #fff;
+  border: 1px solid #e2e5ea;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.mail-panel-header { display: flex; align-items: center; justify-content: space-between; }
+.mail-panel-header h2 { font-size: 13px; margin: 0; }
+#mail-unread-badge {
+  display: inline-block;
+  margin-left: 6px;
+  background: #d84f4f;
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+#mail-list { margin-top: 8px; max-height: 220px; overflow-y: auto; }
+.mail-item { padding: 5px 2px; border-bottom: 1px solid #f0f1f3; font-size: 12px; cursor: pointer; }
+.mail-item:last-child { border-bottom: none; }
+.mail-item:hover { background: #f7f9fc; }
+.mail-item.unread { font-weight: 600; }
+.mail-item .mail-from { color: #2f6fd8; margin-right: 6px; }
+.mail-item .mail-date { color: #999; float: right; font-weight: normal; }
+
+.todo-form { display: flex; gap: 5px; margin-top: 8px; }
+.todo-form input[type="text"] { flex: 1; min-width: 0; }
+.todo-form input[type="datetime-local"] { width: 170px; }
+.todo-pin-input { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: 11px; }
+.todo-pin-input input { width: auto; margin: 0; }
+.todo-item { display: flex; align-items: center; gap: 5px; padding: 6px 2px; border-bottom: 1px solid #f0f1f3; }
+.todo-item.pinned .todo-title { font-weight: 700; }
+.todo-item.completed .todo-title { color: #999; text-decoration: line-through; }
+.todo-title { flex: 1; min-width: 0; word-break: break-word; }
+.todo-due { color: #888; font-size: 11px; white-space: nowrap; }
+.todo-actions { display: flex; gap: 2px; }
+.todo-actions button { padding: 2px 5px; font-size: 11px; }
+.todo-message { min-height: 14px; margin: 5px 0 0; color: #c0392b; font-size: 11px; }
+
+/* ---- 信件內容彈窗 ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal-box {
+  background: #fff;
+  border-radius: 8px;
+  width: min(700px, 90vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+.modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.modal-header h2 { font-size: 15px; margin: 0; }
+.modal-header button { border: none; background: transparent; font-size: 16px; }
+/* ---- 附件圖片預覽 ---- */
+.image-preview-box { width: min(1000px, 94vw); max-height: 92vh; }
+.image-preview-box .modal-header h2 { flex: 1; word-break: break-all; }
+.image-preview-wrap { flex: 1; margin-top: 8px; overflow: auto; text-align: center; }
+.image-preview-wrap img,
+.image-preview-wrap video { max-width: 100%; max-height: 80vh; }
+#mail-modal-body-wrap { flex: 1; margin-top: 8px; }
+#mail-modal-frame { width: 100%; height: 55vh; border: 1px solid #e2e5ea; border-radius: 4px; background: #fff; }
+.meta { color: #888; font-size: 12px; }
+
+/* ---- 行事曆月曆 ---- */
+.calendar-nav { display: flex; gap: 4px; }
+.calendar-nav button { padding: 3px 8px; font-size: 12px; }
+#calendar-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; font-size: 11px; color: #666; }
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+  margin-top: 4px;
+}
+.calendar-weekday { text-align: center; font-size: 11px; color: #888; padding: 2px 0; }
+.calendar-day {
+  min-height: 62px;
+  border: 1px solid #eef0f3;
+  border-radius: 4px;
+  padding: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  background: #fafbfc;
+}
+.calendar-day:hover { border-color: #2f6fd8; }
+.calendar-day.other-month { opacity: 0.35; }
+.calendar-day.today { border-color: #2f6fd8; background: #eef4ff; }
+.calendar-day.selected { outline: 2px solid #2f6fd8; }
+.calendar-day-num { font-weight: 600; }
+.calendar-day-event {
+  margin-top: 2px;
+  padding: 0 3px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.calendar-day-more { color: #888; font-size: 10px; }
+
+#calendar-day-events { margin-top: 10px; border-top: 1px solid #eef0f3; padding-top: 8px; }
+.add-event-box { margin-top: 8px; }
+#add-event-form { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#add-event-form input[type="text"] { flex: 1; min-width: 140px; width: auto; }
+#add-event-form input[type="time"] { width: auto; }
+.day-event-item { font-size: 12px; padding: 3px 0; display: flex; align-items: center; gap: 6px; }
+.day-event-item .legend-dot { flex-shrink: 0; }
+.day-event-link { cursor: pointer; border-radius: 3px; }
+.day-event-link:hover { background: #eef4ff; }
+
+.ticket-card {
+  background: #fff;
+  border: 1px solid #e2e5ea;
+  border-left: 3px solid #d8dde5;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.ticket-card:hover { border-color: #2f6fd8; box-shadow: 0 1px 4px rgba(47, 111, 216, 0.12); }
+.ticket-card.ticket-due-overdue { background: #fff0f0; border-left-color: #d84f4f; }
+.ticket-card.ticket-due-soon { background: #fff9df; border-left-color: #d6a600; }
+.ticket-card .row1 { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.ticket-card .row1 .status-badge { margin-left: auto; }
+.card-select { display: inline-flex !important; margin: 0 !important; }
+.ticket-card .summary { color: #444; margin-top: 5px; line-height: 1.5; }
+.ticket-card .meta { color: #999; font-size: 11px; margin-top: 6px; }
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #eef1f6;
+  color: #556;
+  white-space: nowrap;
+}
+.status-badge.status-info { background: #e3edfc; color: #2f6fd8; }
+.status-badge.status-qc { background: #f1e8fb; color: #8a3fd8; }
+.status-badge.status-warning { background: #fdf1e0; color: #b6720c; }
+.status-badge.status-danger { background: #fbe6e6; color: #c94f4f; }
+.status-badge.status-default { background: #eef1f6; color: #667; }
+
+/* QC分頁的工單左邊框用品保色標示，跟待處理的分頁做出區隔 */
+#ticket-list .ticket-card:has(.status-qc) { border-left-color: #8a3fd8; }
+
+.ticket-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.tab-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #cfd4dc;
+  background: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tab-btn.active { background: #2f6fd8; color: #fff; border-color: #2f6fd8; }
+.tab-count { margin-left: 4px; opacity: 0.8; }
+
+.search-box {
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid #cfd4dc;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* 工單進階搜尋 */
+.ts-search-row { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+.ts-search-row .search-box { margin-bottom: 8px; flex: 1 1 180px; width: auto; min-width: 120px; }
+.adv-toggle-btn { white-space: nowrap; padding: 6px 10px; font-size: 12px; flex: 0 0 auto; }
+.adv-toggle-btn.active { background: #2f6fd8; color: #fff; border-color: #2f6fd8; }
+#ticket-search-query:disabled { background: #f2f4f7; color: #aaa; cursor: not-allowed; }
+
+/* 套用篩選後，已生效的進階條件變成標籤留在搜尋框右側、進階搜尋按鈕左側；點✕可以單獨清掉那一項 */
+.adv-chips-row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; flex: 2 1 240px; min-width: 0; }
+.adv-chips-row .adv-chip { margin-bottom: 8px; }
+
+.adv-filters {
+  background: #f7f9fc;
+  border: 1px solid #e2e5ea;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.adv-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.adv-row-wrap { align-items: flex-start; flex-wrap: wrap; }
+.adv-row > label { font-size: 12px; color: #667; white-space: nowrap; min-width: 56px; }
+.adv-row input[type="text"],
+.adv-row input[type="date"],
+.adv-row select {
+  padding: 5px 7px;
+  border: 1px solid #cfd4dc;
+  border-radius: 4px;
+  font-size: 12px;
+  background: #fff;
+}
+.adv-row input[type="number"].adv-num { width: 84px; padding: 5px 7px; border: 1px solid #cfd4dc; border-radius: 4px; font-size: 12px; }
+.adv-row input[type="text"] { flex: 1; min-width: 0; }
+
+.adv-site-picker { position: relative; flex: 1; min-width: 0; }
+.adv-site-picker input { width: 100%; box-sizing: border-box; }
+.adv-site-results {
+  position: absolute;
+  top: 100%; left: 0; right: 0;
+  z-index: 20;
+  background: #fff;
+  border: 1px solid #cfd4dc;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+}
+.adv-site-results .adv-site-item { padding: 6px 8px; font-size: 12px; cursor: pointer; border-bottom: 1px solid #f0f1f3; }
+.adv-site-results .adv-site-item:last-child { border-bottom: none; }
+.adv-site-results .adv-site-item:hover { background: #eef4ff; }
+.adv-site-results .adv-site-item .site-sub { color: #999; margin-left: 6px; }
+.adv-site-results .adv-site-empty { padding: 6px 8px; font-size: 12px; color: #999; }
+
+.adv-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; background: #eef1f6; border-radius: 12px; font-size: 12px; color: #46618c; white-space: nowrap;
+}
+.adv-chip .adv-chip-x { cursor: pointer; color: #999; font-weight: bold; }
+.adv-chip .adv-chip-x:hover { color: #d84f4f; }
+
+.adv-checkbox-group { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.adv-check-item {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border: 1px solid #cfd4dc; border-radius: 12px;
+  font-size: 12px; cursor: pointer; user-select: none; background: #fff;
+}
+.adv-check-item input { margin: 0; }
+.adv-check-item.checked { background: #eaf1ff; border-color: #2f6fd8; color: #2f6fd8; }
+
+.ts-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0; font-size: 12px; color: #667; }
+.ts-pagination button { padding: 4px 10px; font-size: 12px; }
+.ts-pagination button:disabled { opacity: 0.4; cursor: default; }
+
+.upload-box { margin: 10px 0; }
+#detail-attachments-list { margin-top: 4px; }
+.attachment-link {
+  display: inline-block;
+  margin: 2px 8px 2px 0;
+  padding: 2px 8px;
+  background: #eef1f6;
+  border-radius: 4px;
+  color: #2f6fd8;
+  cursor: pointer;
+  font-size: 12px;
+}
+.attachment-link:hover { background: #dfe6f2; }
+
+.card-timer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e5ea;
+}
+.card-timer-display { font-family: monospace; font-size: 13px; margin-right: 4px; }
+.card-timer button { padding: 3px 8px; font-size: 11px; }
+.card-timer button:disabled { opacity: 0.4; cursor: default; }
+.card-timer-note { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e2e5ea; color: #888; font-size: 11px; }
+.card-actions-row { margin-top: 8px; display: flex; gap: 6px; }
+
+.ticket-id { font-family: monospace; font-weight: 600; }
+.detail-desc { background: #fff; padding: 8px; border-radius: 4px; border: 1px solid #e2e5ea; }
+.detail-desc p { margin: 0 0 8px; }
+.detail-desc p:last-child { margin-bottom: 0; }
+
+.timer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #e2e5ea;
+  border-radius: 6px;
+  padding: 10px;
+  margin: 10px 0;
+}
+.timer-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.timer-display { font-size: 22px; font-family: monospace; }
+.manual-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.manual-duration { display: flex; align-items: center; gap: 4px; }
+.manual-duration input { width: 64px; }
+.timer-controls button { margin-right: 4px; }
+
+.ai-box { margin: 10px 0; }
+#settings-message, #detail-message, #ai-status, #batch-message { color: #2f6fd8; min-height: 14px; }
+
+.git-source-toggle { display: flex; gap: 16px; font-size: 13px; margin-bottom: 8px; }
+.git-source-toggle label { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
+#git-commits-box { margin-bottom: 10px; }
+#git-commits-list { max-height: 220px; overflow-y: auto; border: 1px solid #e3e6eb; border-radius: 4px; padding: 4px; margin-top: 6px; background: #fafbfc; }
+.git-commit-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; font-size: 12px; border-bottom: 1px solid #eef0f3; cursor: pointer; }
+.git-commit-row:last-child { border-bottom: none; }
+.git-commit-hash { font-family: monospace; color: #2f6fd8; flex: 0 0 auto; }
+.git-commit-date { color: #888; flex: 0 0 auto; white-space: nowrap; }
+.git-commit-msg { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#batch-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #2f6fd8;
+  color: #fff;
+  padding: 10px;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+#batch-bar button { border: none; }
+#batch-bar-text { flex: 1; font-size: 12px; }
+#batch-panel-list { background: #fff; border: 1px solid #e2e5ea; border-radius: 4px; padding: 8px; }

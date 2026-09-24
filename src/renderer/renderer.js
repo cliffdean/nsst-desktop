@@ -1,0 +1,2426 @@
+const state = {
+  settings: null,
+  currentUserId: null,
+  tickets: [],
+  currentTicket: null,
+  timers: {}, // { [ticketId]: { status, segments } }，本地算秒數用，不用每秒都問main process
+  tickInterval: null,
+  selectedIds: new Set(), // 批次提交用的多選狀態
+  searchQuery: '',
+  activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單
+  pendingFileIds: [], // 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
+  todos: [],
+  advSearch: {
+    formVisible: false, // 進階搜尋「表單」是否展開；純UI狀態，收合表單不影響目前是否套用了進階條件
+    active: false, // 是否已套用進階條件(搜尋走advanced-search API、上面的簡易搜尋框停用、顯示條件標籤)；收合表單不會動到這個值
+    optionsLoaded: false,
+    site: null, // { id, name } 或 null
+    fields: ['summary', 'description', 'keyword', 'reply', 'project_name', 'user_name', 'customer', 'dealer'],
+    page: 1,
+    perPage: 20,
+    lastMeta: null,
+  },
+  refreshSnapshot: {
+    initialized: false,
+    mailIds: new Set(),
+    ticketIds: new Set(),
+    calendarIds: new Set(),
+  },
+  calendar: {
+    year: new Date().getFullYear(),
+    month: new Date().getMonth(), // 0-based
+    events: [],
+    calendars: [],
+    dataSignature: '',
+    selectedDayEvents: [],
+    editingEvent: null, // 有值代表目前表單是「編輯這一筆」，null代表「新增」
+    selectedDate: dateKey(new Date()),
+  },
+};
+
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// 備註這種自由文字欄位常常有換行，先跳脫HTML特殊字元再把換行轉成<br>，不然會全部擠成一行看不出段落
+function escapeHtmlPreserveNewlines(text) {
+  return escapeHtml(text).replace(/\r\n|\r|\n/g, '<br>');
+}
+
+const $ = (id) => document.getElementById(id);
+
+// 後端 /file/ 對圖片/影片回的Content-Type是application/jpg、application/mp4之類，瀏覽器會當成下載，
+// 所以圖片、影片附件改在客戶端內用<img>/<video>顯示(不看Content-Type)，其他檔案才交給瀏覽器開
+const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
+const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v', 'ogv'];
+
+function fileExt(name) {
+  const m = /.([a-z0-9]+)$/i.exec(String(name || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
+let imagePreviewUrl = '';
+
+function openMediaPreview(url, name, isVideo) {
+  imagePreviewUrl = url;
+  $('image-preview-title').textContent = name || '';
+  $('image-preview-img').classList.toggle('hidden', isVideo);
+  $('image-preview-video').classList.toggle('hidden', !isVideo);
+  if (isVideo) $('image-preview-video').src = url;
+  else $('image-preview-img').src = url;
+  $('image-preview-backdrop').classList.remove('hidden');
+}
+
+function closeImagePreview() {
+  $('image-preview-backdrop').classList.add('hidden');
+  $('image-preview-img').removeAttribute('src');
+  // 關掉視窗要停掉影片，不然會在背景繼續播放/下載
+  const video = $('image-preview-video');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+}
+
+// 附件連結點擊：圖片/影片→預覽視窗，其他→瀏覽器
+function bindAttachmentLinks(container) {
+  container.querySelectorAll('.attachment-link').forEach((el) => {
+    el.addEventListener('click', () => {
+      const url = el.dataset.url;
+      const name = el.dataset.name;
+      const ext = fileExt(name);
+      if (IMAGE_EXTS.includes(ext)) openMediaPreview(url, name, false);
+      else if (VIDEO_EXTS.includes(ext)) openMediaPreview(url, name, true);
+      else window.api.shell.openExternal(url);
+    });
+  });
+}
+
+$('btn-image-preview-close').addEventListener('click', closeImagePreview);
+$('btn-image-preview-open').addEventListener('click', () => window.api.shell.openExternal(imagePreviewUrl));
+$('image-preview-backdrop').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeImagePreview();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeImagePreview();
+});
+
+function showAppNotification(data) {
+  $('app-notification-title').textContent = data.title || '通知';
+  $('app-notification-body').textContent = data.body || '';
+  $('app-notification').classList.remove('hidden');
+}
+
+function formatSeconds(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds || 0));
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+// 跟main process的timerService.liveSecondsOf邏輯一致：已完成區段加總，運行中的那段即時累加，暫停的時間不算
+function liveSecondsOf(timer) {
+  if (!timer || !timer.segments) return 0;
+  if (timer.manual) return timer.manual.seconds;
+  let total = 0;
+  for (const seg of timer.segments) {
+    if (seg.end) {
+      total += Math.max(0, (new Date(seg.end).getTime() - new Date(seg.start).getTime()) / 1000);
+    }
+  }
+  if (timer.status === 'running') {
+    const openSeg = timer.segments[timer.segments.length - 1];
+    if (openSeg && !openSeg.end) {
+      total += Math.max(0, (Date.now() - new Date(openSeg.start).getTime()) / 1000);
+    }
+  }
+  return total;
+}
+
+async function call(promise, onError) {
+  const res = await promise;
+  if (!res.ok) {
+    if (onError) onError(res.error);
+    else alert(res.error);
+    return null;
+  }
+  return res.data;
+}
+
+// ---------------- 設定 ----------------
+
+async function loadSettingsIntoForm() {
+  const settings = await call(window.api.settings.get());
+  if (!settings) return;
+  state.settings = settings;
+  $('set-eip-url').value = settings.eipBaseUrl || '';
+  $('set-api-token').value = settings.apiToken || '';
+  $('set-git-path').value = settings.gitRepoPath || '';
+  $('set-hotkey').value = settings.hotkey || '';
+  $('set-llm-provider').value = settings.llm.provider || 'ollama';
+  $('set-llm-baseurl').value = settings.llm.baseURL || '';
+  $('set-llm-apikey').value = settings.llm.apiKey || '';
+  $('set-llm-model').value = settings.llm.model || '';
+  $('set-mail-username').value = settings.mail.username || '';
+  $('set-mail-password').value = settings.mail.password || '';
+  $('set-mail-imap-host').value = settings.mail.imapHost || '';
+  $('set-mail-imap-port').value = settings.mail.imapPort || 993;
+  $('set-mail-imap-insecure').checked = !!settings.mail.imapAllowInsecureTLS;
+  $('set-mail-calendar-url').value = settings.mail.calendarUrl || '';
+
+  const templates = settings.replyTemplates || {};
+  $('tpl-bug').value = templates.bug || '';
+  $('tpl-feature').value = templates.feature || '';
+  $('tpl-optimize').value = templates.optimize || '';
+  $('tpl-inquiry').value = templates.inquiry || '';
+  $('tpl-other').value = templates.other || '';
+
+  renderProjectPathsList(settings.projectPaths || {});
+
+  const activeHotkey = await call(window.api.settings.getActiveHotkey());
+  $('hotkey-active-hint').textContent = activeHotkey
+    ? `目前實際生效中：${activeHotkey}`
+    : '目前沒有任何快捷鍵生效';
+}
+
+function renderProjectPathsList(projectPaths) {
+  const entries = Object.entries(projectPaths);
+  if (!entries.length) {
+    $('project-paths-list').innerHTML = '<p style="color:#888;font-size:12px;">目前還沒有設定任何專案路徑</p>';
+    return;
+  }
+  $('project-paths-list').innerHTML = entries
+    .map(
+      ([projectId, path]) => `
+      <div class="project-path-row" data-project-id="${projectId}">
+        <span class="project-path-id">專案#${projectId}</span>
+        <input type="text" class="project-path-input" value="${escapeHtml(path)}" />
+        <button class="btn-save-path-row">儲存</button>
+        <button class="btn-remove-path-row">刪除</button>
+      </div>`
+    )
+    .join('');
+
+  $('project-paths-list').querySelectorAll('.btn-save-path-row').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const row = el.closest('.project-path-row');
+      const projectId = row.dataset.projectId;
+      const newPath = row.querySelector('.project-path-input').value.trim();
+      await call(window.api.settings.setProjectPath(projectId, newPath));
+      state.settings = await call(window.api.settings.get());
+    });
+  });
+  $('project-paths-list').querySelectorAll('.btn-remove-path-row').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const row = el.closest('.project-path-row');
+      const projectId = row.dataset.projectId;
+      if (!confirm(`確定要刪除專案#${projectId}的路徑設定嗎？`)) return;
+      await call(window.api.settings.setProjectPath(projectId, ''));
+      state.settings = await call(window.api.settings.get());
+      renderProjectPathsList(state.settings.projectPaths || {});
+    });
+  });
+}
+
+// 把瀏覽器的KeyboardEvent轉成Electron的accelerator字串格式(例如 CommandOrControl+Alt+T)
+function keyEventToAccelerator(e) {
+  const specialKeyNames = {
+    ' ': 'Space',
+    Escape: 'Esc',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Enter: 'Return',
+    Delete: 'Delete',
+    Backspace: 'Backspace',
+    Tab: 'Tab',
+    '+': 'Plus',
+  };
+  const modifierKeys = ['Control', 'Alt', 'Shift', 'Meta'];
+  if (modifierKeys.includes(e.key)) {
+    return null; // 只按了修飾鍵，還沒按到主要按鍵，先不處理
+  }
+
+  const parts = [];
+  if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+
+  let mainKey = specialKeyNames[e.key];
+  if (!mainKey) {
+    mainKey = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  }
+  parts.push(mainKey);
+
+  return parts.join('+');
+}
+
+function onHotkeyCapture(e) {
+  e.preventDefault();
+  const accelerator = keyEventToAccelerator(e);
+  if (accelerator) {
+    $('set-hotkey').value = accelerator;
+  }
+}
+
+async function saveSettings() {
+  const patch = {
+    eipBaseUrl: $('set-eip-url').value.trim(),
+    apiToken: $('set-api-token').value.trim(),
+    gitRepoPath: $('set-git-path').value.trim(),
+    hotkey: $('set-hotkey').value.trim(),
+    llm: {
+      provider: $('set-llm-provider').value,
+      baseURL: $('set-llm-baseurl').value.trim(),
+      apiKey: $('set-llm-apikey').value.trim(),
+      model: $('set-llm-model').value.trim(),
+    },
+    mail: {
+      username: $('set-mail-username').value.trim(),
+      password: $('set-mail-password').value,
+      calendarUrl: $('set-mail-calendar-url').value.trim(),
+      imapHost: $('set-mail-imap-host').value.trim(),
+      imapPort: parseInt($('set-mail-imap-port').value, 10) || 993,
+      imapSecure: true,
+      imapAllowInsecureTLS: $('set-mail-imap-insecure').checked,
+    },
+    replyTemplates: {
+      bug: $('tpl-bug').value,
+      feature: $('tpl-feature').value,
+      optimize: $('tpl-optimize').value,
+      inquiry: $('tpl-inquiry').value,
+      other: $('tpl-other').value,
+    },
+  };
+  const settings = await call(window.api.settings.save(patch), async (err) => {
+    $('settings-message').textContent = '儲存失敗：' + err;
+    // 快捷鍵註冊失敗時main process會恢復成原本的值，這裡把畫面同步回真正生效的狀態，避免顯示跟實際不一致
+    const activeHotkey = await call(window.api.settings.getActiveHotkey());
+    $('set-hotkey').value = activeHotkey || '';
+  });
+  if (settings) {
+    state.settings = settings;
+    const activeHotkey = await call(window.api.settings.getActiveHotkey());
+    $('settings-message').textContent = activeHotkey
+      ? `已儲存，目前生效的快捷鍵：${activeHotkey}`
+      : '已儲存(目前沒有設定快捷鍵)';
+  }
+}
+
+async function doLogin() {
+  const username = $('login-username').value.trim();
+  const password = $('login-password').value;
+  if (!username || !password) {
+    $('login-message').textContent = '請輸入帳號密碼';
+    return;
+  }
+  const baseUrl = $('set-eip-url').value.trim();
+  if (!baseUrl) {
+    $('login-message').textContent = '請先填EIP API網址';
+    return;
+  }
+  $('login-message').textContent = '登入中...';
+  // 登入用的是「已儲存」的網址；使用者剛改完網址還沒按儲存就登入，會打到舊網址，所以先把網址存起來
+  await call(window.api.settings.save({ eipBaseUrl: baseUrl }));
+  const result = await call(window.api.eip.login(username, password), (err) => {
+    $('login-message').textContent = `登入失敗(連線網址：${baseUrl})：${err}`;
+  });
+  if (!result) return;
+
+  $('set-api-token').value = result.token;
+  $('login-password').value = '';
+  await saveSettings();
+  $('login-message').textContent = `登入成功，已取得新Token(使用者：${result.user.name})`;
+}
+
+async function testConnection() {
+  $('settings-message').textContent = '測試中...';
+  const data = await call(window.api.eip.whoami(), (err) => {
+    $('settings-message').textContent = '連線失敗：' + err;
+  });
+  if (data) {
+    $('settings-message').textContent = `連線成功，登入身分：${data.name} (id=${data.id})`;
+  }
+}
+
+async function testMailConnection() {
+  $('settings-message').textContent = '測試信箱連線中...';
+  const result = await call(window.api.mail.listRecent(5), (err) => {
+    $('settings-message').textContent = '信箱連線失敗：' + err;
+  });
+  if (result) {
+    $('settings-message').textContent = `信箱連線成功，共${result.messages.length}封(未讀${result.unseenCount}封)`;
+  }
+}
+
+// ---------------- 信箱 ----------------
+
+function renderMailList(result) {
+  const badge = $('mail-unread-badge');
+  if (result.unseenCount > 0) {
+    badge.textContent = result.unseenCount;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+
+  if (!result.messages.length) {
+    $('mail-list').innerHTML = '<p style="color:#888;">目前沒有信件</p>';
+    return;
+  }
+  $('mail-list').innerHTML = result.messages
+    .map((m) => {
+      const date = m.date ? new Date(m.date).toLocaleString('zh-Hant') : '';
+      return `<div class="mail-item ${m.seen ? '' : 'unread'}" data-uid="${m.uid}">
+        <span class="mail-date">${date}</span>
+        <span class="mail-from">${escapeHtml(m.from)}</span>${escapeHtml(m.subject)}
+      </div>`;
+    })
+    .join('');
+
+  $('mail-list').querySelectorAll('.mail-item').forEach((el) => {
+    el.addEventListener('click', () => openMailDetail(el.dataset.uid));
+  });
+}
+
+// 已完成的待辦，只在勾選完成當天繼續顯示；隔天(日期不同)就從主清單消失，但資料還在，可以到歷史紀錄找
+function isTodoVisibleToday(todo) {
+  if (!todo.completed) return true;
+  if (!todo.completedAt) return true; // 舊資料沒有completedAt，保守顯示，避免突然憑空消失
+  const completedDate = new Date(todo.completedAt);
+  const now = new Date();
+  return (
+    completedDate.getFullYear() === now.getFullYear() &&
+    completedDate.getMonth() === now.getMonth() &&
+    completedDate.getDate() === now.getDate()
+  );
+}
+
+function renderTodoList() {
+  const list = $('todo-list');
+  const todos = [...state.todos]
+    .filter(isTodoVisibleToday)
+    .sort((a, b) => {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+      return (a.reminderAt || '').localeCompare(b.reminderAt || '');
+    });
+  list.innerHTML = todos.length ? todos.map((todo) => `
+    <div class="todo-item ${todo.completed ? 'completed' : ''} ${todo.pinned ? 'pinned' : ''}" data-todo-id="${escapeHtml(todo.id)}">
+      <input type="checkbox" class="todo-check" ${todo.completed ? 'checked' : ''} />
+      <span class="todo-title">${escapeHtml(todo.title)}</span>
+      ${todo.reminderAt ? `<span class="todo-due">提醒 ${escapeHtml(new Date(todo.reminderAt).toLocaleString('zh-Hant'))}</span>` : ''}
+      <span class="todo-actions"><button class="btn-edit-todo">編輯</button><button class="btn-delete-todo">刪除</button></span>
+    </div>`).join('') : '<p style="color:#888;">目前沒有待辦事項</p>';
+}
+
+async function loadTodos() {
+  const todos = await call(window.api.todo.list());
+  if (todos) {
+    state.todos = todos;
+    renderTodoList();
+  }
+}
+
+function resetTodoForm() {
+  $('todo-edit-id').value = '';
+  $('todo-title').value = '';
+  $('todo-reminder').value = '';
+  $('todo-pinned').checked = false;
+  $('todo-message').textContent = '';
+  $('todo-form').classList.add('hidden');
+}
+
+function reminderInputValue(reminderAt) {
+  if (!reminderAt) return '';
+  const date = new Date(reminderAt);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function openTodoForm(todo) {
+  $('todo-edit-id').value = todo ? todo.id : '';
+  $('todo-title').value = todo ? todo.title : '';
+  $('todo-reminder').value = todo ? reminderInputValue(todo.reminderAt) : '';
+  $('todo-pinned').checked = !!todo?.pinned;
+  $('todo-form').classList.remove('hidden');
+  $('todo-title').focus();
+}
+
+async function saveTodo(completedOverride) {
+  const button = $('btn-save-todo');
+  const message = $('todo-message');
+  const id = $('todo-edit-id').value;
+  const existing = state.todos.find((todo) => todo.id === id);
+  button.disabled = true;
+  button.textContent = '儲存中...';
+  message.textContent = '';
+  try {
+    const saved = await call(window.api.todo.save({
+      id: id || undefined,
+      title: $('todo-title').value,
+      reminderAt: $('todo-reminder').value,
+      pinned: $('todo-pinned').checked,
+      completed: completedOverride === undefined ? !!existing?.completed : completedOverride,
+    }), (err) => {
+      message.textContent = `儲存失敗：${err}`;
+    });
+    if (!saved) return;
+    const index = state.todos.findIndex((todo) => todo.id === saved.id);
+    if (index >= 0) state.todos[index] = saved;
+    else state.todos.push(saved);
+    renderTodoList();
+    resetTodoForm();
+  } catch (err) {
+    message.textContent = `儲存失敗：${err.message || err}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = '儲存';
+  }
+}
+
+async function deleteTodo(id) {
+  if (!confirm('確定要刪除這筆待辦事項嗎？')) return;
+  const deleted = await call(window.api.todo.delete(id), (err) => alert('刪除待辦失敗：' + err));
+  if (!deleted) return;
+  state.todos = state.todos.filter((todo) => todo.id !== id);
+  renderTodoList();
+}
+
+// ---------------- 待辦歷史查詢(已完成的待辦，含隔天後從主清單消失的那些) ----------------
+
+function openTodoHistory() {
+  $('todo-history-search').value = '';
+  renderTodoHistory('');
+  $('todo-history-backdrop').classList.remove('hidden');
+  $('todo-history-search').focus();
+}
+
+function closeTodoHistory() {
+  $('todo-history-backdrop').classList.add('hidden');
+}
+
+function renderTodoHistory(keyword) {
+  const kw = (keyword || '').trim().toLowerCase();
+  const items = state.todos
+    .filter((todo) => todo.completed)
+    .filter((todo) => !kw || todo.title.toLowerCase().includes(kw))
+    .sort((a, b) => (b.completedAt || b.updatedAt || '').localeCompare(a.completedAt || a.updatedAt || ''));
+  $('todo-history-list').innerHTML = items.length
+    ? items
+        .map(
+          (todo) => `<div class="todo-item completed">
+            <span class="todo-title">${escapeHtml(todo.title)}</span>
+            <span class="todo-due">完成於 ${todo.completedAt ? escapeHtml(new Date(todo.completedAt).toLocaleString('zh-Hant')) : '-'}</span>
+          </div>`
+        )
+        .join('')
+    : '<p style="color:#888;">沒有符合的歷史待辦</p>';
+}
+
+// ---------------- 裝機單(案場)查詢 ----------------
+
+let installSearchTimer = null;
+
+// 裝機單查詢顯示在右側欄，跟信箱/行事曆/工單查詢互斥切換，左邊工單清單不受影響、隨時看得到
+function openInstallPanel() {
+  // 工單詳情跟裝機單現在分別在左右兩欄，互不影響，可以同時對照著看
+  $('sidebar-default-view').classList.add('hidden');
+  // 工單查詢跟裝機單查詢共用右側欄位置，兩個畫面互斥，開其中一個要先關掉另一個，不然會疊在一起打架
+  $('ticket-search-panel').classList.add('hidden');
+  $('install-panel').classList.remove('hidden');
+  $('install-panel').classList.remove('has-detail');
+  $('install-search').value = '';
+  $('install-search-results').innerHTML = '<p style="color:#888;">輸入關鍵字搜尋案場，或直接看下面全部</p>';
+  $('install-detail').classList.add('hidden');
+  $('install-search').focus();
+  runInstallSearch('');
+}
+
+function closeInstallPanel() {
+  $('install-panel').classList.add('hidden');
+  $('sidebar-default-view').classList.remove('hidden');
+}
+
+async function runInstallSearch(q) {
+  const results = await call(window.api.eip.searchInstallLists(q), (err) => {
+    $('install-search-results').innerHTML = `<p style="color:#d84f4f;">搜尋失敗：${err}</p>`;
+  });
+  if (!results) return;
+  if (!results.length) {
+    $('install-search-results').innerHTML = '<p style="color:#888;">沒有符合的案場</p>';
+    return;
+  }
+  $('install-search-results').innerHTML = results
+    .map(
+      (r) => `<div class="install-card" data-id="${r.id}">
+        <div class="install-name">${r.name || '(無名稱)'} <span style="color:#888;font-weight:normal;">${r.code || ''}</span></div>
+        <div style="color:#555;">${r.address || ''}</div>
+        <div style="color:#888;font-size:12px;">聯絡人：${r.contact || '-'}　電話：${r.phone || '-'}　專案：${r.project_name || '-'}</div>
+      </div>`
+    )
+    .join('');
+  $('install-search-results').querySelectorAll('.install-card').forEach((el) => {
+    el.addEventListener('click', () => openInstallDetail(el.dataset.id));
+  });
+}
+
+async function openInstallDetail(id) {
+  $('install-panel').classList.add('has-detail'); // 選了案場後，搜尋結果縮小、把空間讓給詳細內容
+  $('install-detail').classList.remove('hidden');
+  $('install-detail-name').textContent = '讀取中...';
+  const data = await call(window.api.eip.getInstallList(id), (err) => alert('讀取案場資料失敗：' + err));
+  if (!data) return;
+
+  state.currentInstallList = data;
+  $('install-detail-name').textContent = `${data.name || ''} (${data.code || ''})`;
+  const basicRows = [
+    ['地址', data.address],
+    ['聯絡人', data.contact],
+    ['電話', data.phone],
+    ['業主', data.owner],
+    ['所屬專案', data.project_name],
+  ];
+  $('install-detail-basic').innerHTML = basicRows
+    .map(([label, value]) => `<span class="info-label">${label}</span><span class="info-value">${value || '-'}</span>`)
+    .join('');
+
+  const c = data.connection;
+  if (!c) {
+    $('install-detail-connection').innerHTML = '<p style="color:#888;">這個案場沒有填寫連線設定</p>';
+  } else {
+    // 點一下儲存格直接複製到剪貼簿；密碼也直接顯示(EIP網頁本來就看得到，遮蔽會分不出是空的還是有值)，公網/連結類的多留一個開啟按鈕
+    const copyCell = (value) =>
+      `<td class="copy-cell" data-value="${encodeURIComponent(value || '')}">${value ? escapeHtml(value) : '-'}</td>`;
+
+    $('install-detail-connection').innerHTML = `
+      <table class="conn-table">
+        <tr><th>項目</th><th>內容</th><th></th></tr>
+        <tr><td>內網IP</td>${copyCell(c.ip_address_in)}<td><button class="btn-ping" data-target="ip_address_in">測試連線</button></td></tr>
+        <tr><td>外網IP</td>${copyCell(c.ip_address_out)}<td><button class="btn-ping" data-target="ip_address_out">測試連線</button></td></tr>
+        <tr><td>現場連結</td>${copyCell(c.url)}<td>${c.url ? '<button class="btn-open-link" data-url="' + encodeURIComponent(c.url) + '">開啟</button>' : ''}</td></tr>
+      </table>
+      <table class="conn-table">
+        <tr><th>項目</th><th>帳號</th><th>密碼</th></tr>
+        <tr><td>SSH</td>${copyCell(c.ssh_un)}${copyCell(c.ssh_pw)}</tr>
+        <tr><td>DB</td>${copyCell(c.db_un)}${copyCell(c.db_pw)}</tr>
+        <tr><td>TeamViewer</td>${copyCell(c.tv_un)}${copyCell(c.tv_pw)}</tr>
+        <tr><td>AnyDesk</td>${copyCell(c.ad_un)}${copyCell(c.ad_pw)}</tr>
+        <tr><td>Windows</td>${copyCell(c.wd_un)}${copyCell(c.wd_pw)}</tr>
+        <tr><td>物業</td>${copyCell(c.username)}${copyCell(c.password)}</tr>
+      </table>
+      ${c.memo ? `<p><strong>備註：</strong><br>${escapeHtmlPreserveNewlines(c.memo)}</p>` : ''}
+      <p style="color:#888;font-size:11px;">點一下欄位內容即可複製到剪貼簿；連線測試是用你自己這台電腦去ping，通常要接公司VPN才測得到</p>
+    `;
+    $('install-detail-connection').querySelectorAll('.copy-cell').forEach((el) => {
+      el.addEventListener('click', () => {
+        const value = decodeURIComponent(el.dataset.value);
+        if (!value) return;
+        window.api.clipboard.copy(value);
+        const original = el.textContent;
+        el.textContent = '已複製';
+        setTimeout(() => {
+          el.textContent = original;
+        }, 800);
+      });
+    });
+    $('install-detail-connection').querySelectorAll('.btn-ping').forEach((el) => {
+      el.addEventListener('click', () => pingSite(c[el.dataset.target], el));
+    });
+    $('install-detail-connection').querySelectorAll('.btn-open-link').forEach((el) => {
+      el.addEventListener('click', () => window.api.shell.openExternal(decodeURIComponent(el.dataset.url)));
+    });
+  }
+
+  const tickets = data.recent_tickets || [];
+  $('install-detail-tickets').innerHTML = tickets.length
+    ? tickets
+        .map((t) => `<div class="mini-ticket-row mini-ticket-link" data-id="${t.id}">#${t.id} ${t.summary || ''}</div>`)
+        .join('')
+    : '<p style="color:#888;">沒有找到相關工單</p>';
+  // 點了會在左側欄開啟該工單詳情，右邊裝機單維持顯示，兩邊可以對照著看
+  // 這張工單不一定是指派給自己的(裝機單底下所有工單都會列出來)，如果不是自己的，openTicketDetail會顯示清楚的錯誤訊息
+  $('install-detail-tickets').querySelectorAll('.mini-ticket-link').forEach((el) => {
+    el.addEventListener('click', () => openTicketDetail(el.dataset.id));
+  });
+}
+
+async function pingSite(ip, btnEl) {
+  $('install-ping-result').textContent = `測試連線中(${ip})...`;
+  const result = await call(window.api.site.ping(ip));
+  if (!result) return;
+  $('install-ping-result').textContent = result.reachable
+    ? `✅ ${ip} 連線正常 — ${result.detail}`
+    : `❌ ${ip} 連不上 — ${result.detail}`;
+}
+
+async function jumpToSiteFromTicket() {
+  if (!state.currentTicket || !state.currentTicket.project_id) return;
+  const results = await call(window.api.eip.getInstallListByProject(state.currentTicket.project_id), (err) =>
+    alert('查詢失敗：' + err)
+  );
+  if (!results) return;
+  if (!results.length) {
+    alert('這個專案目前沒有對應的裝機單資料');
+    return;
+  }
+  openInstallPanel();
+  openInstallDetail(results[0].id);
+}
+
+// ---------------- 工單查詢(全站搜尋所有工單，不限自己) ----------------
+
+let ticketSearchTimer = null;
+
+// 工單查詢顯示在右側欄，跟信箱/行事曆/裝機單互斥切換，左邊工單清單不受影響、隨時看得到
+// skipInitialSearch=true時不要先撈一次全部工單，讓呼叫端(viewCurrentTicketFull)接著用openTicketSearchDetail
+// 帶出的單一結果來決定列表內容，避免兩個非同步搜尋互相competing、全部工單的結果晚到蓋掉單一工單的結果
+function openTicketSearchPanel(focusSearch = true, skipInitialSearch = false) {
+  $('sidebar-default-view').classList.add('hidden');
+  $('install-panel').classList.add('hidden');
+  $('ticket-search-panel').classList.remove('hidden');
+  $('ticket-search-panel').classList.remove('has-detail');
+  $('ticket-search-detail').classList.add('hidden');
+  if (skipInitialSearch) return;
+  $('ticket-search-query').value = '';
+  resetAdvSearchState(true); // 順便會觸發一次runTicketSearch('')，不用再另外呼叫
+  $('ticket-search-results').innerHTML = '<p style="color:#888;">輸入關鍵字搜尋全部工單</p>';
+  if (focusSearch) $('ticket-search-query').focus();
+}
+
+// 左側自己的工單詳情專注在回覆，要看完整資訊時借用右側工單查詢的詳情面板顯示同一張單
+// 這時把上面的搜尋列表也帶成只有這一張單，畫面才不會「上面顯示一堆別的工單、下面卻是這張的詳情」，看起來對不起來
+function viewCurrentTicketFull() {
+  if (!state.currentTicket) return;
+  openTicketSearchPanel(false, true);
+  openTicketSearchDetail(state.currentTicket.id, true);
+}
+
+function closeTicketSearchPanel() {
+  $('ticket-search-panel').classList.add('hidden');
+  $('sidebar-default-view').classList.remove('hidden');
+}
+
+// 關閉下面的工單詳情，回到上面完整的清單(清掉搜尋條件，重新列出全部工單)
+function closeTicketSearchDetail() {
+  // 只收起詳情、把列表區還原成整頁高度，搜尋框內容跟已篩選出的結果都維持原樣不動，
+  // 使用者就是想留著篩選條件看清楚列表，不是要重新搜尋一次全部
+  $('ticket-search-panel').classList.remove('has-detail');
+  $('ticket-search-detail').classList.add('hidden');
+}
+
+// 欄位對齊EIP總表；空值的欄位直接不顯示，避免卡片塞滿「-」
+function ticketSearchCardHtml(t) {
+  const metaItem = (label, value) =>
+    value ? `<span><span class="ts-k">${label}</span> ${escapeHtml(value)}</span>` : '';
+  return `<div class="install-card ticket-search-card" data-id="${t.id}">
+        <div class="install-name">${formatTicketNo(t.id)} ${escapeHtml(t.summary || '(無摘要)')} ${statusBadge(t)}</div>
+        <div style="color:#555;margin-top:4px;">${escapeHtml(t.project_name || '(無專案)')}</div>
+        <div class="ts-card-meta">
+          ${metaItem('任務類型', t.kind_name)}
+          ${metaItem('類型', t.type_label)}
+          ${metaItem('分類', t.classification)}
+          ${t.severity_text ? `<span><span class="ts-k">嚴重程度</span> <span class="ts-severity-${t.severity}">${escapeHtml(t.severity_text)}</span></span>` : ''}
+        </div>
+        <div class="ts-card-meta">
+          ${metaItem('負責人員', t.p_user_name)}
+          ${metaItem('反應人', t.c_user_name)}
+          ${metaItem('客戶', t.customer_name)}
+          ${metaItem('經銷商', t.dealer_name)}
+        </div>
+        <div class="ts-card-meta">
+          ${metaItem('開始', t.start_time)}
+          ${metaItem('結束', t.end_time)}
+          ${t.progress_text ? `<span class="ts-progress ${progressClass(t.progress_text)}">${escapeHtml(t.progress_text)}</span>` : ''}
+        </div>
+      </div>`;
+}
+
+function bindTicketSearchCards() {
+  $('ticket-search-results').querySelectorAll('.ticket-search-card').forEach((el) => {
+    el.addEventListener('click', () => openTicketSearchDetail(el.dataset.id));
+  });
+}
+
+async function runTicketSearch(q) {
+  $('ticket-search-pagination').classList.add('hidden');
+  const results = await call(window.api.eip.searchTickets(q), (err) => {
+    $('ticket-search-results').innerHTML = `<p style="color:#d84f4f;">搜尋失敗：${escapeHtml(err)}</p>`;
+  });
+  if (!results) return;
+  if (!results.length) {
+    $('ticket-search-results').innerHTML = '<p style="color:#888;">沒有符合的工單</p>';
+    return;
+  }
+  $('ticket-search-results').innerHTML = results.map(ticketSearchCardHtml).join('');
+  bindTicketSearchCards();
+}
+
+// ---------------- 工單進階搜尋 ----------------
+
+// 狀態/種類/任務類型/嚴重程度等下拉選項只在第一次展開進階搜尋時跟後端要一次，同一次開啟App期間重複使用
+async function ensureAdvSearchOptionsLoaded() {
+  if (state.advSearch.optionsLoaded) return;
+  const options = await call(window.api.eip.getTicketSearchOptions(), (err) => {
+    alert('讀取進階搜尋選項失敗：' + err);
+  });
+  if (!options) return;
+  state.advSearch.optionsLoaded = true;
+
+  const fieldLabels = {
+    summary: '標題／摘要', description: '說明', keyword: '關鍵字欄位', reply: '回覆內容',
+    project_name: '專案名稱', user_name: '人員姓名', customer: '客戶', dealer: '經銷商',
+  };
+  renderAdvCheckboxGroup('adv-fields', Object.keys(fieldLabels).map((v) => ({ value: v, text: fieldLabels[v] })), state.advSearch.fields);
+  renderAdvCheckboxGroup('adv-statuses', options.statuses, []);
+  renderAdvCheckboxGroup('adv-categories', options.categories, []);
+
+  const dateFieldSelect = $('adv-date-field');
+  dateFieldSelect.innerHTML = (options.date_fields || [])
+    .map((f) => `<option value="${escapeHtml(f.value)}">${escapeHtml(f.text)}</option>`)
+    .join('');
+}
+
+// 畫一組「勾選chip」；checkedValues非空時預設勾選那幾個(目前只有搜尋範圍用得到，狀態/種類預設全不勾=不篩選)
+function renderAdvCheckboxGroup(containerId, items, checkedValues) {
+  const checkedSet = new Set((checkedValues || []).map(String));
+  const container = $(containerId);
+  container.innerHTML = (items || [])
+    .map((item) => {
+      const checked = checkedSet.has(String(item.value));
+      return `<label class="adv-check-item${checked ? ' checked' : ''}">
+        <input type="checkbox" value="${escapeHtml(item.value)}" ${checked ? 'checked' : ''} />${escapeHtml(item.text)}
+      </label>`;
+    })
+    .join('');
+  container.querySelectorAll('.adv-check-item').forEach((label) => {
+    const input = label.querySelector('input');
+    input.addEventListener('change', () => label.classList.toggle('checked', input.checked));
+  });
+}
+
+function getCheckedValues(containerId) {
+  return Array.from($(containerId).querySelectorAll('input:checked')).map((el) => el.value);
+}
+
+// 只負責展開/收合表單本身(純UI)，不碰目前是否已套用進階條件、也不觸發任何搜尋，
+// 使用者習慣收合表單是為了讓列表/詳情有更大空間看，不代表要放棄已經套用的搜尋條件
+async function toggleAdvSearchPanel() {
+  state.advSearch.formVisible = !state.advSearch.formVisible;
+  $('ticket-adv-filters').classList.toggle('hidden', !state.advSearch.formVisible);
+  $('btn-toggle-adv-search').textContent = state.advSearch.formVisible ? '進階搜尋 ▴' : '進階搜尋 ▾';
+  if (state.advSearch.formVisible) {
+    await ensureAdvSearchOptionsLoaded();
+  }
+}
+
+function closeAdvFormPanel() {
+  state.advSearch.formVisible = false;
+  $('ticket-adv-filters').classList.add('hidden');
+  $('btn-toggle-adv-search').textContent = '進階搜尋 ▾';
+}
+
+// 簡易搜尋框跟進階條件是互斥的兩套搜尋方式：進階條件套用後，關鍵字改由表單內的「關鍵字」欄位負責，
+// 上面的搜尋框停用避免使用者誤以為打字也會生效、卻其實沒有真的在用
+function setSimpleSearchBoxEnabled(enabled) {
+  const box = $('ticket-search-query');
+  box.disabled = !enabled;
+  if (enabled) {
+    box.placeholder = '搜尋工單編號／摘要／專案名稱...';
+  } else {
+    box.value = '';
+    box.placeholder = '進階搜尋中，條件請見右側標籤';
+  }
+}
+
+// 表單上任一欄位只要有值就算「有進階條件」；用來判斷清到最後一個條件時要不要整個退出進階模式
+function hasActiveAdvFilters() {
+  return Boolean(
+    $('adv-keyword').value.trim() ||
+    state.advSearch.site ||
+    $('adv-id-from').value.trim() ||
+    $('adv-id-to').value.trim() ||
+    $('adv-date-from').value ||
+    $('adv-date-to').value ||
+    getCheckedValues('adv-statuses').length ||
+    getCheckedValues('adv-categories').length ||
+    $('adv-assignee-name').value.trim() ||
+    $('adv-reporter-name').value.trim()
+  );
+}
+
+// 點「套用篩選」：套用條件、收合表單讓出空間看結果，條件會變成標籤留在搜尋框旁邊
+async function applyAdvSearch() {
+  state.advSearch.active = true;
+  closeAdvFormPanel();
+  setSimpleSearchBoxEnabled(false);
+  await runAdvancedTicketSearch(1);
+  renderAdvChips();
+}
+
+// 整個退出進階搜尋模式(條件全部被拿掉、或按了「清除條件」)：恢復簡易搜尋框，改回原本的search API
+function exitAdvSearchMode() {
+  state.advSearch.active = false;
+  state.advSearch.site = null;
+  $('adv-site-selected').classList.add('hidden');
+  $('adv-chips-row').classList.add('hidden');
+  $('adv-chips-row').innerHTML = '';
+  $('ticket-search-pagination').classList.add('hidden');
+  setSimpleSearchBoxEnabled(true);
+  runTicketSearch('');
+}
+
+// chip上的✕：清掉那一個條件，如果清完後表單已經沒有任何條件就直接退出進階模式，否則用剩下的條件重新查一次
+function clearOneAdvFilterAndRerun() {
+  if (hasActiveAdvFilters()) {
+    runAdvancedTicketSearch(1).then(renderAdvChips);
+  } else {
+    exitAdvSearchMode();
+  }
+}
+
+// 清除條件按鈕：重置表單所有欄位(含checkbox)，但表單維持展開讓使用者可以直接輸入新條件
+function resetAdvSearchState(closeForm) {
+  state.advSearch.site = null;
+  state.advSearch.page = 1;
+  state.advSearch.lastMeta = null;
+  $('adv-keyword').value = '';
+  $('adv-site-input').value = '';
+  $('adv-site-selected').classList.add('hidden');
+  $('adv-site-results').classList.add('hidden');
+  $('adv-id-from').value = '';
+  $('adv-id-to').value = '';
+  $('adv-date-from').value = '';
+  $('adv-date-to').value = '';
+  $('adv-assignee-name').value = '';
+  $('adv-reporter-name').value = '';
+  $('adv-order-by').value = 'id';
+  $('adv-order-dir').value = 'desc';
+  if ($('adv-date-field').options.length) $('adv-date-field').selectedIndex = 0;
+  if (state.advSearch.optionsLoaded) {
+    renderAdvCheckboxGroup('adv-fields', getFieldCheckboxItems(), state.advSearch.fields);
+    renderAdvCheckboxGroup('adv-statuses', getStatusCheckboxItemsFromDom(), []);
+    renderAdvCheckboxGroup('adv-categories', getCategoryCheckboxItemsFromDom(), []);
+  }
+  if (closeForm) closeAdvFormPanel();
+  exitAdvSearchMode();
+}
+
+// 把目前表單上的條件畫成標籤放在搜尋框右側；每個標籤都能單獨清掉那一項條件並重新查詢
+function renderAdvChips() {
+  const row = $('adv-chips-row');
+  if (!state.advSearch.active) {
+    row.classList.add('hidden');
+    row.innerHTML = '';
+    return;
+  }
+
+  const chips = [];
+  const keyword = $('adv-keyword').value.trim();
+  if (keyword) {
+    chips.push({ label: `關鍵字：${keyword}`, onClear: () => { $('adv-keyword').value = ''; clearOneAdvFilterAndRerun(); } });
+  }
+  if (state.advSearch.site) {
+    chips.push({ label: `案場：${state.advSearch.site.name}`, onClear: () => {
+      state.advSearch.site = null;
+      $('adv-site-selected').classList.add('hidden');
+      clearOneAdvFilterAndRerun();
+    } });
+  }
+  const idFrom = $('adv-id-from').value.trim();
+  const idTo = $('adv-id-to').value.trim();
+  if (idFrom || idTo) {
+    chips.push({ label: `工單號：${idFrom || '不限'}～${idTo || '不限'}`, onClear: () => {
+      $('adv-id-from').value = ''; $('adv-id-to').value = '';
+      clearOneAdvFilterAndRerun();
+    } });
+  }
+  const dateFrom = $('adv-date-from').value;
+  const dateTo = $('adv-date-to').value;
+  if (dateFrom || dateTo) {
+    const sel = $('adv-date-field');
+    const fieldLabel = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '時間';
+    chips.push({ label: `${fieldLabel}：${dateFrom || '不限'}～${dateTo || '不限'}`, onClear: () => {
+      $('adv-date-from').value = ''; $('adv-date-to').value = '';
+      clearOneAdvFilterAndRerun();
+    } });
+  }
+  const statusTexts = getCheckedTexts('adv-statuses');
+  if (statusTexts.length) {
+    chips.push({ label: `狀態：${statusTexts.join('、')}`, onClear: () => { uncheckAll('adv-statuses'); clearOneAdvFilterAndRerun(); } });
+  }
+  const categoryTexts = getCheckedTexts('adv-categories');
+  if (categoryTexts.length) {
+    chips.push({ label: `種類：${categoryTexts.join('、')}`, onClear: () => { uncheckAll('adv-categories'); clearOneAdvFilterAndRerun(); } });
+  }
+  const assigneeName = $('adv-assignee-name').value.trim();
+  if (assigneeName) {
+    chips.push({ label: `負責人員：${assigneeName}`, onClear: () => { $('adv-assignee-name').value = ''; clearOneAdvFilterAndRerun(); } });
+  }
+  const reporterName = $('adv-reporter-name').value.trim();
+  if (reporterName) {
+    chips.push({ label: `反應人：${reporterName}`, onClear: () => { $('adv-reporter-name').value = ''; clearOneAdvFilterAndRerun(); } });
+  }
+
+  if (!chips.length) {
+    exitAdvSearchMode();
+    return;
+  }
+
+  row.innerHTML = chips
+    .map((c, i) => `<span class="adv-chip">${escapeHtml(c.label)} <span class="adv-chip-x" data-idx="${i}">✕</span></span>`)
+    .join('');
+  row.classList.remove('hidden');
+  row.querySelectorAll('.adv-chip-x').forEach((el) => {
+    el.addEventListener('click', () => chips[Number(el.dataset.idx)].onClear());
+  });
+}
+
+function getCheckedTexts(containerId) {
+  return Array.from($(containerId).querySelectorAll('.adv-check-item.checked')).map((label) => label.textContent.trim());
+}
+
+function uncheckAll(containerId) {
+  $(containerId).querySelectorAll('input:checked').forEach((input) => {
+    input.checked = false;
+    input.closest('.adv-check-item').classList.remove('checked');
+  });
+}
+
+// 清除條件後重繪checkbox時，直接拿目前DOM上已經存在的選項文字重建(不用再打一次API)
+function getFieldCheckboxItems() {
+  return Array.from($('adv-fields').querySelectorAll('.adv-check-item')).map((label) => ({
+    value: label.querySelector('input').value,
+    text: label.textContent.trim(),
+  }));
+}
+function getStatusCheckboxItemsFromDom() {
+  return Array.from($('adv-statuses').querySelectorAll('.adv-check-item')).map((label) => ({
+    value: label.querySelector('input').value,
+    text: label.textContent.trim(),
+  }));
+}
+function getCategoryCheckboxItemsFromDom() {
+  return Array.from($('adv-categories').querySelectorAll('.adv-check-item')).map((label) => ({
+    value: label.querySelector('input').value,
+    text: label.textContent.trim(),
+  }));
+}
+
+let advSiteSearchTimer = null;
+
+function bindAdvSiteInput() {
+  $('adv-site-input').addEventListener('input', () => {
+    clearTimeout(advSiteSearchTimer);
+    const q = $('adv-site-input').value.trim();
+    if (!q) {
+      $('adv-site-results').classList.add('hidden');
+      $('adv-site-results').innerHTML = '';
+      return;
+    }
+    advSiteSearchTimer = setTimeout(() => runAdvSiteSearch(q), 300);
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.adv-site-picker')) $('adv-site-results').classList.add('hidden');
+  });
+}
+
+async function runAdvSiteSearch(q) {
+  const results = await call(window.api.eip.searchInstallLists(q));
+  const container = $('adv-site-results');
+  if (!results || !results.length) {
+    container.innerHTML = '<div class="adv-site-empty">沒有符合的案場</div>';
+    container.classList.remove('hidden');
+    return;
+  }
+  container.innerHTML = results
+    .slice(0, 20)
+    .map((s) => `<div class="adv-site-item" data-id="${s.id}" data-name="${escapeHtml(s.name)}">
+      ${escapeHtml(s.name)}${s.code ? `<span class="site-sub">${escapeHtml(s.code)}</span>` : ''}
+    </div>`)
+    .join('');
+  container.classList.remove('hidden');
+  container.querySelectorAll('.adv-site-item').forEach((el) => {
+    el.addEventListener('click', () => selectAdvSite(el.dataset.id, el.dataset.name));
+  });
+}
+
+function selectAdvSite(id, name) {
+  state.advSearch.site = { id, name };
+  $('adv-site-input').value = '';
+  $('adv-site-results').classList.add('hidden');
+  const chip = $('adv-site-selected');
+  chip.innerHTML = `${escapeHtml(name)} <span class="adv-chip-x" id="adv-site-clear">✕</span>`;
+  chip.classList.remove('hidden');
+  $('adv-site-clear').addEventListener('click', () => {
+    state.advSearch.site = null;
+    chip.classList.add('hidden');
+  });
+}
+
+// 把表單上目前的所有進階條件組成後端advanced-search API要的query參數物件
+function collectAdvFilters(page) {
+  const filters = {};
+  const keyword = $('adv-keyword').value.trim();
+  if (keyword) filters.keyword = keyword;
+
+  const fields = getCheckedValues('adv-fields');
+  if (fields.length) filters.fields = fields.join(',');
+
+  if (state.advSearch.site) filters.site_id = state.advSearch.site.id;
+
+  const idFrom = $('adv-id-from').value.trim();
+  if (idFrom) filters.id_from = idFrom;
+  const idTo = $('adv-id-to').value.trim();
+  if (idTo) filters.id_to = idTo;
+
+  const dateField = $('adv-date-field').value;
+  if (dateField) filters.date_field = dateField;
+  const dateFrom = $('adv-date-from').value;
+  if (dateFrom) filters.date_from = dateFrom;
+  const dateTo = $('adv-date-to').value;
+  if (dateTo) filters.date_to = dateTo;
+
+  const statuses = getCheckedValues('adv-statuses');
+  if (statuses.length) filters.status = statuses.join(',');
+
+  const categories = getCheckedValues('adv-categories');
+  if (categories.length) filters.category = categories.join(',');
+
+  const assigneeName = $('adv-assignee-name').value.trim();
+  if (assigneeName) filters.assignee_name = assigneeName;
+  const reporterName = $('adv-reporter-name').value.trim();
+  if (reporterName) filters.reporter_name = reporterName;
+
+  filters.order_by = $('adv-order-by').value;
+  filters.order_dir = $('adv-order-dir').value;
+  filters.page = page || 1;
+  filters.per_page = state.advSearch.perPage;
+
+  return filters;
+}
+
+async function runAdvancedTicketSearch(page = 1) {
+  state.advSearch.page = page;
+  const filters = collectAdvFilters(page);
+  const res = await call(window.api.eip.advancedSearchTickets(filters), (err) => {
+    $('ticket-search-results').innerHTML = `<p style="color:#d84f4f;">搜尋失敗：${escapeHtml(err)}</p>`;
+    $('ticket-search-pagination').classList.add('hidden');
+  });
+  if (!res) return;
+
+  const { items, meta } = res;
+  state.advSearch.lastMeta = meta;
+  if (!items || !items.length) {
+    $('ticket-search-results').innerHTML = '<p style="color:#888;">沒有符合的工單</p>';
+  } else {
+    $('ticket-search-results').innerHTML = items.map(ticketSearchCardHtml).join('');
+    bindTicketSearchCards();
+  }
+  renderAdvSearchPagination(meta);
+}
+
+function renderAdvSearchPagination(meta) {
+  const pager = $('ticket-search-pagination');
+  if (!meta || meta.total <= 0) {
+    pager.classList.add('hidden');
+    return;
+  }
+  pager.classList.remove('hidden');
+  $('ts-page-info').textContent = `共 ${meta.total} 筆，第 ${meta.current_page} / ${meta.last_page} 頁`;
+  $('btn-ts-prev-page').disabled = meta.current_page <= 1;
+  $('btn-ts-next-page').disabled = meta.current_page >= meta.last_page;
+}
+
+// 從左側工單帶進來查看詳情時，直接用已經抓到的完整工單資料組出唯一一張卡片，
+// 不用另外呼叫搜尋API(欄位可能因搜尋條件而匹配到別的單，直接用手上這張最準)
+function showTicketAloneInSearchList(ticket) {
+  $('ticket-search-query').value = formatTicketNo(ticket.id);
+  $('ticket-search-results').innerHTML = ticketSearchCardHtml(ticket);
+  $('ticket-search-pagination').classList.add('hidden');
+  bindTicketSearchCards();
+}
+
+// EIP單號顯示成 #000123 (補滿6碼)
+function formatTicketNo(id) {
+  return `#${String(id).padStart(6, '0')}`;
+}
+
+// 進度文字的顏色：超前/準時/進行中偏綠，延誤偏紅，其他(未開始等)維持灰色
+function progressClass(text) {
+  if (/延誤/.test(text)) return 'bad';
+  if (/超前|準時|進行中/.test(text)) return 'good';
+  return '';
+}
+
+// 時間欄位：EIP用 0000-00-00 00:00:00 表示沒填，這種值等同空白
+function validTime(value) {
+  return value && !String(value).startsWith('0000-00-00') ? String(value) : '';
+}
+
+function ticketInfoRows(rows) {
+  return rows
+    .filter(([, value]) => value != null && value !== '')
+    .map(([label, value]) => `<span class="info-label">${label}</span><span class="info-value">${escapeHtmlPreserveNewlines(value)}</span>`)
+    .join('');
+}
+
+// 一則回覆：回覆人／時間／當時標記的狀態、實際工作時段與耗時、回覆內容(EIP富文本HTML)、附檔
+function ticketReplyHtml(r) {
+  const workStart = validTime(r.work_start_time);
+  const workEnd = validTime(r.work_end_time);
+  const duration = Number(r.actual_duration_seconds) > 0 ? formatSeconds(r.actual_duration_seconds) : '';
+  const workLine = workStart || workEnd
+    ? `<div class="ts-reply-work">工作時間：${escapeHtml(workStart || '-')} ~ ${escapeHtml(workEnd || '-')}${duration ? `（耗時 ${duration}）` : ''}</div>`
+    : duration ? `<div class="ts-reply-work">耗時：${duration}</div>` : '';
+  const files = (r.files || [])
+    .map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`)
+    .join('');
+  return `<div class="ts-reply">
+    <div class="ts-reply-head">
+      <strong>${escapeHtml(r.user_name || '(未知)')}</strong>
+      <span>${escapeHtml(r.created_at || '')}</span>
+      ${r.status_text ? `<span class="status-badge status-default">${escapeHtml(r.status_text)}</span>` : ''}
+    </div>
+    ${workLine}
+    <div class="ts-reply-body">${r.reply || '(無內容)'}</div>
+    ${files}
+  </div>`;
+}
+
+// 右側詳情：欄位順序與名稱對齊EIP總表；所有代碼(狀態/類型/人員ID等)都已由後端轉成文字，這裡不顯示任何裸ID
+// syncList=true時(從左側工單點「查看工單詳情」進來)，上面的搜尋列表會被換成只有這一張單，見showTicketAloneInSearchList
+async function openTicketSearchDetail(id, syncList = false) {
+  $('ticket-search-panel').classList.add('has-detail');
+  $('ticket-search-detail').classList.remove('hidden');
+  $('ticket-search-detail-title').textContent = '讀取中...';
+  $('ticket-search-detail-basic').innerHTML = '';
+  $('ticket-search-detail-desc').innerHTML = '';
+  $('ticket-search-detail-attachments').innerHTML = '';
+  $('ticket-search-detail-replies').innerHTML = '';
+  $('ticket-search-reply-count').textContent = '';
+  $('ticket-search-not-own').classList.add('hidden');
+
+  const ticket = await call(window.api.eip.getTicket(id), (err) => alert('讀取工單失敗：' + err));
+  if (!ticket) return;
+
+  if (syncList) showTicketAloneInSearchList(ticket);
+
+  // 不是自己負責的工單只能查看，標個提示字，避免誤會可以回覆/計時
+  const isOwn = state.currentUserId == null || ticket.p_user_id === state.currentUserId;
+  $('ticket-search-not-own').classList.toggle('hidden', isOwn);
+
+  $('ticket-search-detail-title').textContent = ticket.summary || '(無摘要)';
+
+  const estimate = Number(ticket.estimate) > 0 ? `${ticket.estimate} 小時` : '';
+  $('ticket-search-detail-basic').innerHTML = ticketInfoRows([
+    ['單號', formatTicketNo(ticket.id)],
+    ['狀態', ticket.is_qc_stage ? `${ticket.status_text}（已轉品保）` : ticket.status_text],
+    ['進度', ticket.progress_text],
+    ['任務類型', ticket.kind_name],
+    ['專案名稱', ticket.project_name],
+    ['類型', ticket.type_label],
+    ['分類', ticket.classification],
+    ['嚴重程度', ticket.severity_text],
+    ['負責人員', ticket.p_user_name],
+    ['反應人', ticket.c_user_name],
+    ['客戶名稱', ticket.customer_name],
+    ['經銷商', ticket.dealer_name],
+    ['系統功能版本', ticket.version_text],
+    ['負責業務', ticket.sales_name],
+    ['預計工時', estimate],
+    ['創建日期', validTime(ticket.created_at)],
+    ['任務開始日期', validTime(ticket.start_time)],
+    ['任務結束日期', validTime(ticket.end_time)],
+    ['最後更新', validTime(ticket.updated_at)],
+  ]);
+
+  // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
+  $('ticket-search-detail-desc').innerHTML = ticket.description || '(無說明)';
+
+  const attachments = ticket.attachments || [];
+  $('ticket-search-detail-attachments').innerHTML = attachments.length
+    ? attachments.map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`).join('')
+    : '<span style="color:#888;font-size:12px;">目前沒有附件</span>';
+
+  // API已依時間新到舊排序，跟EIP回覆頁一致，最新的回覆在最上面
+  const replies = ticket.replies || [];
+  $('ticket-search-reply-count').textContent = replies.length ? `（共 ${replies.length} 則）` : '';
+  $('ticket-search-detail-replies').innerHTML = replies.length
+    ? replies.map(ticketReplyHtml).join('')
+    : '<span style="color:#888;font-size:12px;">目前沒有回覆記錄</span>';
+
+  bindAttachmentLinks($('ticket-search-detail'));
+}
+
+async function refreshMail() {
+  const result = await call(window.api.mail.listRecent(20), (err) => {
+    if (!$('mail-list').children.length) $('mail-list').innerHTML = `<p style="color:#d84f4f;">讀取信箱失敗：${escapeHtml(err)}</p>`;
+  });
+  if (!result) return { label: '信件', count: 0 };
+  const ids = new Set(result.messages.map((message) => String(message.uid)));
+  const count = state.refreshSnapshot.initialized
+    ? [...ids].filter((id) => !state.refreshSnapshot.mailIds.has(id)).length
+    : 0;
+  state.refreshSnapshot.mailIds = ids;
+  renderMailList(result);
+  return { label: '信件', count };
+}
+
+async function openMailDetail(uid) {
+  $('mail-modal-subject').textContent = '讀取中...';
+  $('mail-modal-meta').textContent = '';
+  $('mail-modal-frame').srcdoc = '';
+  $('mail-modal-backdrop').classList.remove('hidden');
+
+  const msg = await call(window.api.mail.getMessage(uid), (err) => {
+    $('mail-modal-subject').textContent = '讀取失敗';
+    $('mail-modal-meta').textContent = err;
+  });
+  if (!msg) return;
+
+  $('mail-modal-subject').textContent = msg.subject;
+  $('mail-modal-meta').textContent = `${msg.from}　${msg.date ? new Date(msg.date).toLocaleString('zh-Hant') : ''}`;
+  // 信件內容可能來自不明寄件者，一律丟進沒有任何權限(sandbox="")的iframe呈現，避免裡面的script/連結影響到App本身
+  if (msg.html) {
+    $('mail-modal-frame').srcdoc = msg.html;
+  } else {
+    $('mail-modal-frame').srcdoc = `<pre style="white-space:pre-wrap;font-family:inherit;">${escapeHtml(msg.text || '(無內容)')}</pre>`;
+  }
+
+  refreshMail(); // 讀過的信要更新未讀狀態/角標
+}
+
+function closeMailModal() {
+  $('mail-modal-backdrop').classList.add('hidden');
+  $('mail-modal-frame').srcdoc = '';
+}
+
+// ---------------- 行事曆(月曆檢視，含所有分享行事曆) ----------------
+
+function monthRangeForGrid(year, month) {
+  // 找出這個月的月曆格子要顯示的完整範圍(含補上個月/下個月的空白格)：從那一週的週日到最後一週的週六
+  const firstOfMonth = new Date(year, month, 1);
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+
+  const lastOfMonth = new Date(year, month + 1, 0);
+  const gridEnd = new Date(lastOfMonth);
+  gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()) + 1); // +1讓時間區間是exclusive的上界
+
+  return { gridStart, gridEnd };
+}
+
+// 圖例列出「這次抓到的全部行事曆」，不是只列出剛好這個月有事件的，
+// 這樣即使某個行事曆這個月沒事，使用者也能確認它有被正確抓到
+function renderCalendarLegend(calendars) {
+  // 附上這段期間的事件數量，這樣一眼就能分辨「這個行事曆本來就沒事件」還是「抓取失敗」，
+  // 不用再猜是不是漏掉了
+  $('calendar-legend').innerHTML = calendars
+    .map((c) => {
+      if (c.error) {
+        return `<span class="legend-item" title="抓取失敗：${c.error}">⚠ ${c.name}</span>`;
+      }
+      return `<span class="legend-item"><span class="legend-dot" style="background:${c.color}"></span>${c.name}(${c.eventCount})</span>`;
+    })
+    .join('');
+}
+
+function renderDayEventsList(dateStr) {
+  const events = state.calendar.events.filter((e) => e.start && dateKey(e.start) === dateStr);
+  state.calendar.selectedDayEvents = events; // 記下來，點擊事件時用index去查，不用重新篩選
+  if (!events.length) {
+    $('calendar-day-events').innerHTML = `<p style="color:#888;">${dateStr} 沒有排程</p>`;
+    return;
+  }
+  $('calendar-day-events').innerHTML =
+    `<p style="font-weight:600;">${dateStr}</p>` +
+    events
+      .map((e, i) => {
+        const time = e.allDay
+          ? '全天'
+          : e.start.toLocaleTimeString('zh-Hant', { hour: '2-digit', minute: '2-digit' });
+        return `<div class="day-event-item day-event-link" data-index="${i}"><span class="legend-dot" style="background:${e.color}"></span>${time}　${e.summary}　<span style="color:#999;">[${e.calendarName}]</span></div>`;
+      })
+      .join('');
+  $('calendar-day-events').querySelectorAll('.day-event-link').forEach((el) => {
+    el.addEventListener('click', () => openEventForEdit(state.calendar.selectedDayEvents[Number(el.dataset.index)]));
+  });
+}
+
+function renderCalendarGrid() {
+  const { year, month } = state.calendar;
+  $('calendar-month-label').textContent = `${year}年${month + 1}月`;
+
+  const { gridStart } = monthRangeForGrid(year, month);
+  const todayStr = dateKey(new Date());
+  const weekdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+
+  const eventsByDay = new Map();
+  for (const e of state.calendar.events) {
+    if (!e.start) continue;
+    const key = dateKey(e.start);
+    if (!eventsByDay.has(key)) eventsByDay.set(key, []);
+    eventsByDay.get(key).push(e);
+  }
+
+  let html = weekdayNames.map((w) => `<div class="calendar-weekday">${w}</div>`).join('');
+  const cursor = new Date(gridStart);
+  for (let i = 0; i < 42; i++) {
+    const key = dateKey(cursor);
+    const isOtherMonth = cursor.getMonth() !== month;
+    const dayEvents = eventsByDay.get(key) || [];
+    const shown = dayEvents.slice(0, 3);
+    const more = dayEvents.length - shown.length;
+
+    html += `<div class="calendar-day ${isOtherMonth ? 'other-month' : ''} ${key === todayStr ? 'today' : ''} ${key === state.calendar.selectedDate ? 'selected' : ''}" data-date="${key}">
+      <div class="calendar-day-num">${cursor.getDate()}</div>
+      ${shown.map((e) => `<div class="calendar-day-event" style="background:${e.color}">${e.summary}</div>`).join('')}
+      ${more > 0 ? `<div class="calendar-day-more">+${more}</div>` : ''}
+    </div>`;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  $('calendar-grid').innerHTML = html;
+
+  $('calendar-grid').querySelectorAll('.calendar-day').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.calendar.selectedDate = el.dataset.date;
+      renderCalendarGrid();
+      renderDayEventsList(el.dataset.date);
+    });
+  });
+
+  renderCalendarLegend(state.calendar.calendars || []);
+  renderDayEventsList(state.calendar.selectedDate);
+}
+
+async function refreshCalendar() {
+  const { gridStart, gridEnd } = monthRangeForGrid(state.calendar.year, state.calendar.month);
+  const result = await call(window.api.calendar.listRange(gridStart.toISOString(), gridEnd.toISOString()), () => {
+    // 保留目前日曆內容，避免背景刷新失敗時整個區塊閃爍或消失
+  });
+  if (result) {
+    const events = result.events || [];
+    const calendars = result.calendars || [];
+    const ids = new Set(events.map((event) => String(event.uid || event.id || `${event.start}|${event.summary}|${event.calendarName}`)));
+    const count = state.refreshSnapshot.initialized
+      ? [...ids].filter((id) => !state.refreshSnapshot.calendarIds.has(id)).length
+      : 0;
+    state.refreshSnapshot.calendarIds = ids;
+    const dataSignature = JSON.stringify({ year: state.calendar.year, month: state.calendar.month, events, calendars });
+    if (dataSignature === state.calendar.dataSignature) return { label: '行事曆', count };
+    state.calendar.events = events;
+    state.calendar.calendars = calendars;
+    state.calendar.dataSignature = dataSignature;
+    renderCalendarGrid();
+    return { label: '行事曆', count };
+  }
+  return { label: '行事曆', count: 0 };
+}
+
+function changeCalendarMonth(delta) {
+  state.calendar.month += delta;
+  if (state.calendar.month < 0) {
+    state.calendar.month = 11;
+    state.calendar.year -= 1;
+  } else if (state.calendar.month > 11) {
+    state.calendar.month = 0;
+    state.calendar.year += 1;
+  }
+  refreshCalendar();
+}
+
+function goToCurrentMonth() {
+  const now = new Date();
+  state.calendar.year = now.getFullYear();
+  state.calendar.month = now.getMonth();
+  state.calendar.selectedDate = dateKey(now);
+  refreshCalendar();
+}
+
+function openAddEventForm() {
+  state.calendar.editingEvent = null;
+  $('add-event-form').classList.remove('hidden');
+  $('new-event-title').value = '';
+  $('new-event-allday').checked = true;
+  $('new-event-time').value = '09:00';
+  $('btn-submit-new-event').textContent = '新增';
+  $('btn-delete-event').classList.add('hidden');
+  $('add-event-message').textContent = '';
+}
+
+function openEventForEdit(event) {
+  if (!event) return;
+  state.calendar.editingEvent = event;
+  $('add-event-form').classList.remove('hidden');
+  $('new-event-title').value = event.summary || '';
+  $('new-event-allday').checked = !!event.allDay;
+  $('new-event-time').value = event.allDay
+    ? '09:00'
+    : `${String(event.start.getHours()).padStart(2, '0')}:${String(event.start.getMinutes()).padStart(2, '0')}`;
+  // 編輯時沿用原本事件所在那一天，日期本身不提供修改(避免表單過於複雜)，要換日期就刪掉重建
+  state.calendar.selectedDate = dateKey(event.start);
+  $('btn-submit-new-event').textContent = '更新';
+  $('btn-delete-event').classList.remove('hidden');
+  $('add-event-message').textContent = '';
+}
+
+function cancelEventForm() {
+  state.calendar.editingEvent = null;
+  $('add-event-form').classList.add('hidden');
+  $('new-event-title').value = '';
+  $('add-event-message').textContent = '';
+}
+
+function buildEventTimeFromForm() {
+  const allDay = $('new-event-allday').checked;
+  const dateStr = state.calendar.selectedDate;
+  if (allDay) {
+    return { start: `${dateStr}T00:00:00`, allDay };
+  }
+  const time = $('new-event-time').value || '09:00';
+  return { start: `${dateStr}T${time}:00`, allDay };
+}
+
+async function submitNewEvent() {
+  const title = $('new-event-title').value.trim();
+  if (!title) {
+    $('add-event-message').textContent = '請輸入標題';
+    return;
+  }
+  const { start, allDay } = buildEventTimeFromForm();
+  const editing = state.calendar.editingEvent;
+
+  const action = editing
+    ? window.api.calendar.updateEvent({ url: editing.url, uid: editing.uid, summary: title, start, allDay })
+    : window.api.calendar.createEvent({ summary: title, start, allDay });
+
+  $('add-event-message').textContent = editing ? '更新中...' : '新增中...';
+  const result = await call(action, (err) => {
+    $('add-event-message').textContent = (editing ? '更新失敗：' : '新增失敗：') + err;
+  });
+  if (!result) return;
+
+  $('add-event-message').textContent = editing ? '已更新' : '已新增';
+  cancelEventForm();
+  refreshCalendar();
+}
+
+async function deleteCurrentEvent() {
+  const editing = state.calendar.editingEvent;
+  if (!editing) return;
+  if (!confirm(`確定要刪除「${editing.summary}」這筆事件嗎？`)) return;
+
+  $('add-event-message').textContent = '刪除中...';
+  const result = await call(window.api.calendar.deleteEvent({ url: editing.url }), (err) => {
+    $('add-event-message').textContent = '刪除失敗：' + err;
+  });
+  if (!result) return;
+
+  $('add-event-message').textContent = '已刪除';
+  cancelEventForm();
+  refreshCalendar();
+}
+
+// ---------------- 工單清單(含inline計時器，因為多張工單可能同時在跑) ----------------
+
+// 狀態代碼對應語意色系：0新任務/1已指派=待處理(藍)，7追蹤=提醒(橘)，10品保中=審核(紫)，5失敗=警示(紅)，其餘預設灰
+const STATUS_COLOR_CLASS = {
+  0: 'status-info',
+  1: 'status-info',
+  5: 'status-danger',
+  7: 'status-warning',
+  10: 'status-qc',
+};
+
+function statusBadge(ticket) {
+  const cls = STATUS_COLOR_CLASS[ticket.status] || 'status-default';
+  return `<span class="status-badge ${cls}">${escapeHtml(ticket.status_text || '')}</span>`;
+}
+
+function timerControlsHtml(ticket) {
+  if (ticket.is_qc_stage) {
+    return '<div class="card-timer-note">品保審核中，不需要計時</div>';
+  }
+  const timer = state.timers[ticket.id] || { status: 'idle', segments: [] };
+  const seconds = liveSecondsOf(timer);
+  const isRunning = timer.status === 'running';
+  const isPaused = timer.status === 'paused';
+  return `
+    <div class="card-timer" data-timer-for="${ticket.id}">
+      <span class="card-timer-display">${formatSeconds(seconds)}</span>
+      <button class="btn-card-start" data-id="${ticket.id}" ${isRunning ? 'disabled' : ''}>開始</button>
+      <button class="btn-card-pause" data-id="${ticket.id}" ${isRunning ? '' : 'disabled'}>暫停</button>
+      <button class="btn-card-stop" data-id="${ticket.id}" ${isRunning || isPaused ? '' : 'disabled'}>停止</button>
+    </div>`;
+}
+
+function filteredTickets() {
+  const byTab = state.tickets.filter((t) => (state.activeTab === 'qc' ? t.is_qc_stage : !t.is_qc_stage));
+  const q = state.searchQuery.trim().toLowerCase();
+  const filtered = !q ? byTab : byTab.filter((t) => {
+    return (
+      String(t.id).includes(q) ||
+      (t.summary || '').toLowerCase().includes(q) ||
+      (t.project_name || '').toLowerCase().includes(q)
+    );
+  });
+  return filtered.sort((a, b) => {
+    const aTime = Date.parse(ticketDueValue(a));
+    const bTime = Date.parse(ticketDueValue(b));
+    if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
+    if (Number.isNaN(aTime)) return 1;
+    if (Number.isNaN(bTime)) return -1;
+    return aTime - bTime;
+  });
+}
+
+function ticketDueValue(ticket) {
+  return ticket.end_time || ticket.due_time || ticket.deadline || ticket.expected_end_time || ticket.planned_end_time || '';
+}
+
+function ticketDueClass(ticket) {
+  const dueTime = Date.parse(ticketDueValue(ticket));
+  if (Number.isNaN(dueTime)) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekEnd = new Date(today);
+  weekEnd.setDate(today.getDate() + (7 - today.getDay()));
+  weekEnd.setHours(23, 59, 59, 999);
+  if (dueTime < today.getTime()) return 'ticket-due-overdue';
+  if (dueTime <= weekEnd.getTime()) return 'ticket-due-soon';
+  return '';
+}
+
+function updateTabCounts() {
+  const normalCount = state.tickets.filter((t) => !t.is_qc_stage).length;
+  const qcCount = state.tickets.filter((t) => t.is_qc_stage).length;
+  $('tab-count-normal').textContent = `(${normalCount})`;
+  $('tab-count-qc').textContent = `(${qcCount})`;
+}
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  state.selectedIds.clear();
+  document.querySelectorAll('.tab-btn').forEach((el) => el.classList.toggle('active', el.dataset.tab === tab));
+  updateBatchBar();
+  renderTicketList();
+}
+
+function renderTicketList() {
+  const container = $('ticket-list');
+  updateTabCounts();
+  const tickets = filteredTickets();
+  if (!tickets.length) {
+    const emptyText = state.searchQuery
+      ? '沒有符合搜尋的工單'
+      : state.activeTab === 'qc'
+      ? '目前沒有品保審核中的工單'
+      : '目前沒有本週五之前需要處理的工單';
+    container.innerHTML = `<p>${emptyText}。</p>`;
+    return;
+  }
+  container.innerHTML = tickets
+    .map(
+      (t) => `
+      <div class="ticket-card ${ticketDueClass(t)}" data-id="${t.id}">
+        <div class="row1">
+          <label class="card-select"><input type="checkbox" class="chk-select" data-id="${t.id}" ${state.selectedIds.has(String(t.id)) ? 'checked' : ''} /></label>
+          <span>#${t.id} ${t.project_name || t.name || ''}</span>${statusBadge(t)}
+        </div>
+        <div class="summary">${t.summary || ''}</div>
+        <div class="meta">開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}</div>
+        ${timerControlsHtml(t)}
+        <div class="card-actions-row">
+          <button class="btn-card-attach" data-id="${t.id}" title="不寫回覆，直接上傳檔案掛到這張工單">附加檔案</button>
+        </div>
+      </div>`
+    )
+    .join('');
+
+  // 整張卡片都能點開詳情，只有勾選框/計時按鈕/附加檔案這些「卡片上的其他操作」要排除，不然會被誤觸連帶打開詳情
+  container.querySelectorAll('.ticket-card').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button, input, label')) return;
+      openTicketDetail(el.dataset.id);
+    });
+  });
+  container.querySelectorAll('.btn-card-attach').forEach((el) => {
+    el.addEventListener('click', () => pickAndAttachForCard(el.dataset.id));
+  });
+  container.querySelectorAll('.btn-card-start').forEach((el) => {
+    el.addEventListener('click', () => onCardTimerAction(el.dataset.id, 'start'));
+  });
+  container.querySelectorAll('.btn-card-pause').forEach((el) => {
+    el.addEventListener('click', () => onCardTimerAction(el.dataset.id, 'pause'));
+  });
+  container.querySelectorAll('.btn-card-stop').forEach((el) => {
+    el.addEventListener('click', () => onCardTimerAction(el.dataset.id, 'stop'));
+  });
+  container.querySelectorAll('.chk-select').forEach((el) => {
+    el.addEventListener('change', () => {
+      if (el.checked) state.selectedIds.add(el.dataset.id);
+      else state.selectedIds.delete(el.dataset.id);
+      updateBatchBar();
+    });
+  });
+}
+
+async function pickAndAttachForCard(ticketId) {
+  const filePath = await call(window.api.dialog.pickFile());
+  if (!filePath) return;
+  const uploaded = await call(window.api.eip.uploadFile(filePath), (err) => alert('上傳失敗：' + err));
+  if (!uploaded) return;
+  await call(window.api.eip.attachFile(ticketId, uploaded.file_id), (err) => alert('附加到工單失敗：' + err));
+  alert('已附加到工單');
+}
+
+// ---------------- 批次選取／提交(同一個專案的多張工單可以一起送出) ----------------
+
+function selectedTickets() {
+  return state.tickets.filter((t) => state.selectedIds.has(String(t.id)));
+}
+
+function updateBatchBar() {
+  const selected = selectedTickets();
+  const bar = $('batch-bar');
+  if (selected.length < 2) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+  const projectIds = new Set(selected.map((t) => String(t.project_id || '')));
+  const qcStages = new Set(selected.map((t) => !!t.is_qc_stage));
+  if (projectIds.size > 1) {
+    $('batch-bar-text').textContent = `已選 ${selected.length} 張，但分屬不同專案，批次提交只支援同一個專案`;
+    $('btn-batch-open').disabled = true;
+  } else if (qcStages.size > 1) {
+    $('batch-bar-text').textContent = `已選 ${selected.length} 張，但有的已轉品保有的還沒，批次提交需要階段一致`;
+    $('btn-batch-open').disabled = true;
+  } else {
+    $('batch-bar-text').textContent = `已選 ${selected.length} 張工單(同一專案)`;
+    $('btn-batch-open').disabled = false;
+  }
+}
+
+function clearSelection() {
+  state.selectedIds.clear();
+  updateBatchBar();
+  renderTicketList();
+}
+
+function openBatchPanel() {
+  const selected = selectedTickets();
+  if (selected.length < 2) return;
+
+  $('ticket-list-view').classList.add('hidden');
+  $('batch-bar').classList.add('hidden');
+  $('batch-panel').classList.remove('hidden');
+  $('batch-panel-list').textContent = selected.map((t) => `#${t.id} ${t.summary || ''}`).join('、');
+  $('batch-reply-info').value = '';
+  const isQcStage = !!selected[0].is_qc_stage;
+  $('batch-reply-status').innerHTML = buildStatusOptionsHtml(isQcStage, selected[0].status);
+  $('batch-transfer-to-label').classList.add('hidden');
+  $('batch-message').textContent = '';
+}
+
+function backFromBatch() {
+  $('batch-panel').classList.add('hidden');
+  $('ticket-list-view').classList.remove('hidden');
+  refreshTicketList();
+}
+
+async function submitBatch() {
+  const selected = selectedTickets();
+  const info = $('batch-reply-info').value.trim();
+  const status = $('batch-reply-status').value;
+  const transferTo = status === '10' ? $('batch-reply-transfer-to').value : '';
+  if (!info) {
+    $('batch-message').textContent = '請先填寫共用回覆內容';
+    return;
+  }
+
+  let okCount = 0;
+  const errors = [];
+  for (const ticket of selected) {
+    $('batch-message').textContent = `送出中... (${okCount + errors.length + 1}/${selected.length})`;
+    const stopped = await call(window.api.timer.stop(ticket.id));
+    const payload = {
+      info,
+      status,
+      transfer_to: transferTo,
+      work_start_time: stopped ? stopped.firstStart : undefined,
+      work_end_time: stopped ? stopped.lastEnd : undefined,
+      actual_duration_seconds: stopped ? stopped.totalSeconds : undefined,
+    };
+    const result = await call(window.api.eip.replyTicket(ticket.id, payload), (err) => {
+      errors.push(`#${ticket.id}: ${err}`);
+    });
+    if (result) {
+      okCount++;
+      await window.api.timer.reset(ticket.id);
+      delete state.timers[ticket.id];
+    }
+  }
+
+  state.selectedIds.clear();
+  if (errors.length === 0) {
+    $('batch-message').textContent = `全部送出成功(${okCount}張)，回到清單...`;
+    setTimeout(backFromBatch, 1000);
+  } else {
+    $('batch-message').textContent = `完成${okCount}張，失敗${errors.length}張：${errors.join('；')}`;
+  }
+}
+
+async function onCardTimerAction(ticketId, action) {
+  const result = await call(window.api.timer[action](ticketId));
+  if (!result) return;
+  if (action === 'stop') {
+    // stop回傳的是統計摘要，不是{status,segments}，重新問一次目前狀態
+    state.timers[ticketId] = await call(window.api.timer.get(ticketId));
+  } else {
+    state.timers[ticketId] = result;
+  }
+  renderTicketList();
+  if (state.currentTicket && String(state.currentTicket.id) === String(ticketId)) {
+    updateDetailTimerDisplay();
+  }
+}
+
+// 每秒只更新畫面上的數字，不重新整理整個清單(避免閃爍、也不用一直問main process)
+function tick() {
+  document.querySelectorAll('[data-timer-for]').forEach((el) => {
+    const ticketId = el.dataset.timerFor;
+    const timer = state.timers[ticketId];
+    if (!timer) return;
+    const display = el.querySelector('.card-timer-display');
+    if (display) display.textContent = formatSeconds(liveSecondsOf(timer));
+  });
+  updateDetailTimerDisplay();
+}
+
+async function refreshTicketList() {
+  const [tickets, timers] = await Promise.all([
+    call(window.api.eip.listTickets(), (err) => {
+      $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
+    }),
+    call(window.api.timer.getAll()),
+  ]);
+  if (timers) state.timers = timers;
+  if (!tickets) return { label: '工單', count: 0 };
+  const ids = new Set(tickets.map((ticket) => String(ticket.id)));
+  const count = state.refreshSnapshot.initialized
+    ? [...ids].filter((id) => !state.refreshSnapshot.ticketIds.has(id)).length
+    : 0;
+  state.refreshSnapshot.ticketIds = ids;
+  state.tickets = tickets;
+  renderTicketList();
+  return { label: '工單', count };
+}
+
+// ---------------- 工單詳情 ----------------
+
+// 尚未轉品保：6進行中/3暫停/7追蹤/10轉品保。已轉品保：2功能正常(或8=功能正常且關單，限status==4)/5功能異常
+function buildStatusOptionsHtml(isQcStage, currentStatus) {
+  if (isQcStage) {
+    const normalOption =
+      Number(currentStatus) === 4
+        ? '<option value="8">功能正常，任務關閉</option>'
+        : '<option value="2">功能正常</option>';
+    return normalOption + '<option value="5">功能異常</option>';
+  }
+  return `
+    <option value="6">任務進行中(先回報進度，狀態維持指派中)</option>
+    <option value="3">任務暫停</option>
+    <option value="7">任務追蹤(列為追蹤單)</option>
+    <option value="10">完成並轉品保(任務品保中，已轉單待安排後續)</option>
+  `;
+}
+
+function renderAttachments(ticket) {
+  const attachments = ticket.attachments || [];
+  if (!attachments.length) {
+    $('detail-attachments-list').innerHTML = '<span style="color:#888;font-size:12px;">目前沒有附件</span>';
+    return;
+  }
+  $('detail-attachments-list').innerHTML = attachments
+    .map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`)
+    .join('');
+  bindAttachmentLinks($('detail-attachments-list'));
+}
+
+async function pickAndUploadForDetail() {
+  const filePath = await call(window.api.dialog.pickFile());
+  if (!filePath) return;
+  $('pending-files-text').textContent = '上傳中...';
+  const uploaded = await call(window.api.eip.uploadFile(filePath), (err) => {
+    $('pending-files-text').textContent = '上傳失敗：' + err;
+  });
+  if (!uploaded) return;
+  state.pendingFileIds.push(uploaded.file_id);
+  $('pending-files-text').textContent = `已上傳待送出：${uploaded.files.map((f) => f.original_filename).join('、')}(送出回覆時會一起附加)`;
+}
+
+function updateDetailTimerDisplay() {
+  if (!state.currentTicket) return;
+  const timer = state.timers[state.currentTicket.id];
+  $('timer-display').textContent = formatSeconds(liveSecondsOf(timer));
+
+  // 已手動設定時：計時按鈕沒意義，改顯示設定摘要
+  const manual = timer && timer.manual;
+  ['btn-timer-start', 'btn-timer-pause', 'btn-timer-stop'].forEach((id) => $(id).classList.toggle('hidden', !!manual));
+  $('timer-manual-summary').classList.toggle('hidden', !manual);
+  $('btn-manual-clear').classList.toggle('hidden', !manual);
+  if (manual) {
+    $('timer-manual-summary').textContent = '手動設定：' + formatLocalDateTime(manual.start) + ' ~ ' + formatLocalDateTime(manual.end) + '，用時 ' + formatSeconds(manual.seconds);
+  }
+}
+
+function formatLocalDateTime(iso) {
+  const d = new Date(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+// datetime-local 要的格式是 YYYY-MM-DDTHH:mm(本地時間)
+function toInputValue(iso) {
+  return formatLocalDateTime(iso).replace(' ', 'T');
+}
+
+function openManualForm() {
+  const timer = state.timers[state.currentTicket.id];
+  const manual = timer && timer.manual;
+  if (manual) {
+    $('manual-start').value = toInputValue(manual.start);
+    $('manual-end').value = toInputValue(manual.end);
+    $('manual-hours').value = Math.floor(manual.seconds / 3600);
+    $('manual-minutes').value = Math.round((manual.seconds % 3600) / 60);
+    $('timer-manual-message').textContent = '';
+  } else if (timer && timer.segments && timer.segments.length) {
+    // 計時器已經記錄過：帶入第一段開始、最後一段結束(還在跑就用現在)與已記錄的用時，方便直接微調
+    const first = timer.segments[0];
+    const last = timer.segments[timer.segments.length - 1];
+    $('manual-start').value = toInputValue(first.start);
+    $('manual-end').value = toInputValue(last.end || new Date().toISOString());
+    // 分鐘無條件捨去，避免用時超過(結束−開始)被後端擋下；不足一分鐘至少帶1分
+    const totalMinutes = Math.max(1, Math.floor(liveSecondsOf(timer) / 60));
+    $('manual-hours').value = Math.floor(totalMinutes / 60);
+    $('manual-minutes').value = totalMinutes % 60;
+    $('timer-manual-message').textContent = timer.status === 'running'
+      ? '已帶入目前計時記錄(計時中，結束時間為現在)；套用後會改成手動設定並停止計時'
+      : '已帶入計時器的記錄(暫停的時間已扣除)，可直接修改後套用';
+  } else {
+    $('timer-manual-message').textContent = '';
+  }
+  $('timer-manual-form').classList.remove('hidden');
+}
+
+// 起訖時間都填了就先用「結束−開始」帶入用時，使用者再依實際扣掉休息時間微調
+function autoFillManualDuration() {
+  const s = $('manual-start').value;
+  const e = $('manual-end').value;
+  if (!s || !e) return;
+  const diff = Math.round((new Date(e).getTime() - new Date(s).getTime()) / 1000);
+  if (diff <= 0) return;
+  $('manual-hours').value = Math.floor(diff / 3600);
+  $('manual-minutes').value = Math.floor((diff % 3600) / 60);
+}
+
+async function applyManualTime() {
+  const s = $('manual-start').value;
+  const e = $('manual-end').value;
+  if (!s || !e) {
+    $('timer-manual-message').textContent = '請填開始與結束時間';
+    return;
+  }
+  const seconds = (Number($('manual-hours').value) || 0) * 3600 + (Number($('manual-minutes').value) || 0) * 60;
+  const timer = await call(
+    window.api.timer.setManual(state.currentTicket.id, {
+      start: new Date(s).toISOString(),
+      end: new Date(e).toISOString(),
+      seconds,
+    }),
+    (err) => {
+      $('timer-manual-message').textContent = '設定失敗：' + err;
+    }
+  );
+  if (!timer) return;
+  state.timers[state.currentTicket.id] = timer;
+  $('timer-manual-form').classList.add('hidden');
+  renderTicketList();
+  updateDetailTimerDisplay();
+}
+
+async function clearManualTime() {
+  const timer = await call(window.api.timer.clearManual(state.currentTicket.id));
+  if (!timer) return;
+  state.timers[state.currentTicket.id] = timer;
+  $('timer-manual-form').classList.add('hidden');
+  ['manual-start', 'manual-end', 'manual-hours', 'manual-minutes'].forEach((id) => ($(id).value = ''));
+  renderTicketList();
+  updateDetailTimerDisplay();
+}
+
+async function openTicketDetail(id) {
+  const ticket = await call(window.api.eip.getTicket(id), (err) => alert('讀取工單失敗：' + err));
+  if (!ticket) return;
+
+  state.currentTicket = ticket;
+  $('ticket-detail').classList.remove('hidden');
+  $('ticket-list-view').classList.add('hidden');
+
+  $('detail-title').textContent = `${ticket.name || ''} / ${ticket.summary || ''}`;
+  $('detail-id').textContent = `#${ticket.id}`;
+  $('detail-project').textContent = ticket.project_name
+    ? `所屬專案：${ticket.project_name} (id=${ticket.project_id})`
+    : '所屬專案：(無)';
+  $('btn-jump-to-site').classList.toggle('hidden', !ticket.project_id);
+
+  const savedType = await call(window.api.ticketMeta.getType(ticket.id));
+  $('ticket-type-select').value = savedType || defaultLocalTypeFor(ticket);
+  $('ticket-type-eip-hint').textContent = ticket.type_text ? `(EIP總表類型：${ticket.type_text})` : '';
+
+  // 工單描述來自EIP的富文本編輯器(CKEditor)，本來就是HTML，直接用innerHTML呈現才會有正確排版，
+  // 跟textContent顯示會看到一堆<p>標籤不一樣；這是同事在EIP後台自己填的內容，跟網頁版本身的信任層級一致
+  $('detail-description').innerHTML = ticket.description || '(無說明)';
+  $('reply-info').value = '';
+  $('reply-commit-message').value = '';
+  $('reply-status').innerHTML = buildStatusOptionsHtml(ticket.is_qc_stage, ticket.status);
+  $('reply-transfer-to-label').classList.add('hidden');
+  $('detail-message').textContent = '';
+  $('ai-status').textContent = '';
+  $('git-extra-note').value = '';
+  $('git-mode-uncommitted').checked = true;
+  $('git-commits-box').classList.add('hidden');
+  $('git-commits-list').innerHTML = '';
+  $('btn-do-git-commit').classList.add('hidden');
+  $('git-commit-status').textContent = '';
+  $('pending-files-text').textContent = '';
+  state.pendingFileIds = [];
+  renderAttachments(ticket);
+
+  // 不是自己負責的工單只能查看(可能是同一個專案底下同事在跑的)，不能回覆/計時，避免誤觸動到別人的工單
+  const isOwn = state.currentUserId == null || ticket.p_user_id === state.currentUserId;
+  $('not-own-notice').classList.toggle('hidden', isOwn);
+  $('reply-section').classList.toggle('hidden', !isOwn);
+
+  // 品保審核階段不需要計時操作
+  $('timer-box').classList.toggle('hidden', !!ticket.is_qc_stage);
+  $('timer-manual-form').classList.add('hidden');
+  ['manual-start', 'manual-end', 'manual-hours', 'manual-minutes'].forEach((id) => ($(id).value = ''));
+
+  const resolvedPath = await call(window.api.git.resolvePath(ticket.project_id));
+  $('detail-project-path').value = resolvedPath || '';
+
+  if (!state.timers[ticket.id]) {
+    state.timers[ticket.id] = await call(window.api.timer.get(ticket.id));
+  }
+  updateDetailTimerDisplay();
+}
+
+async function saveProjectPath() {
+  if (!state.currentTicket) return;
+  const localPath = $('detail-project-path').value.trim();
+  await call(window.api.settings.setProjectPath(state.currentTicket.project_id, localPath), (err) => {
+    $('detail-message').textContent = '儲存路徑失敗：' + err;
+  });
+  $('detail-message').textContent = '已儲存這個專案的Git路徑';
+}
+
+function backToList() {
+  state.currentTicket = null;
+  $('ticket-detail').classList.add('hidden');
+  $('ticket-list-view').classList.remove('hidden');
+  refreshTicketList();
+}
+
+function onGitSourceModeChange() {
+  const mode = document.querySelector('input[name="git-source-mode"]:checked').value;
+  $('git-commits-box').classList.toggle('hidden', mode !== 'commits');
+}
+
+async function loadCommitsList() {
+  if (!state.currentTicket) return;
+  $('git-commits-list').innerHTML = '<p class="meta">讀取中...</p>';
+  const commits = await call(
+    window.api.git.listCommits(state.currentTicket.project_id, 30),
+    (err) => {
+      $('git-commits-list').innerHTML = `<p style="color:#c0392b;">${escapeHtml(err)}</p>`;
+    }
+  );
+  if (!commits) return;
+  if (!commits.length) {
+    $('git-commits-list').innerHTML = '<p class="meta">這個專案的git路徑裡沒有提交紀錄</p>';
+    return;
+  }
+  $('git-commits-list').innerHTML = commits
+    .map(
+      (c) => `
+      <label class="git-commit-row">
+        <input type="checkbox" value="${c.hash}" />
+        <span class="git-commit-hash">${c.shortHash}</span>
+        <span class="git-commit-date">${escapeHtml(String(c.date).slice(0, 16))}</span>
+        <span class="git-commit-msg">${escapeHtml(c.message.split('\n')[0])}</span>
+      </label>`
+    )
+    .join('');
+}
+
+async function generateAiReply() {
+  if (!state.currentTicket) return;
+  $('ai-status').textContent = 'AI產生中，請稍候...(git讀取+LLM，可能需要幾秒到數十秒)';
+  $('btn-do-git-commit').classList.add('hidden');
+  $('git-commit-status').textContent = '';
+
+  const mode = document.querySelector('input[name="git-source-mode"]:checked').value;
+  const projectId = state.currentTicket.project_id;
+  const timer = state.timers[state.currentTicket.id];
+  let source;
+  let repoPathForStatus = '';
+
+  if (mode === 'commits') {
+    const checked = Array.from($('git-commits-list').querySelectorAll('input[type="checkbox"]:checked')).map(
+      (el) => el.value
+    );
+    if (!checked.length) {
+      $('ai-status').textContent = '請先載入並勾選至少一筆commit';
+      return;
+    }
+    const detail = await call(window.api.git.getCommitsDetail(projectId, checked), (err) => {
+      $('ai-status').textContent = '讀取Git commit失敗：' + err;
+    });
+    if (!detail) return;
+    source = { mode: 'commits', commits: detail.commits };
+    repoPathForStatus = detail.repoPath;
+  } else {
+    const sinceIso = timer && timer.segments.length ? timer.segments[0].start : null;
+    const gitChanges = await call(
+      window.api.git.collectChanges(sinceIso, projectId),
+      (err) => {
+        $('ai-status').textContent = '讀取Git失敗：' + err;
+      }
+    );
+    if (!gitChanges) return;
+    source = { mode: 'uncommitted', ...gitChanges };
+    repoPathForStatus = gitChanges.repoPath;
+  }
+
+  const type = $('ticket-type-select').value;
+  const templateText = (type && state.settings.replyTemplates && state.settings.replyTemplates[type]) || '';
+  const typeLabel = TICKET_TYPE_LABELS[type] || '';
+
+  const result = await call(
+    window.api.llm.generateReply({
+      ticket: state.currentTicket,
+      source,
+      durationSeconds: timer ? liveSecondsOf(timer) : 0,
+      userNote: $('git-extra-note').value.trim(),
+      templateText,
+      typeLabel,
+    }),
+    (err) => {
+      $('ai-status').textContent = 'AI產生失敗：' + err;
+    }
+  );
+  if (!result) return;
+
+  $('reply-info').value = result.reply || '';
+  $('reply-commit-message').value = result.commitMessage || '';
+  const canCommit = mode === 'uncommitted' && !!result.commitMessage;
+  $('btn-do-git-commit').classList.toggle('hidden', !canCommit);
+  $('ai-status').textContent = `已產生(套用git路徑：${repoPathForStatus})，請自行確認/編輯後再送出${
+    canCommit ? '；若要直接commit請按下方確認按鈕' : ''
+  }。`;
+}
+
+async function confirmGitCommit() {
+  if (!state.currentTicket) return;
+  const message = $('reply-commit-message').value.trim();
+  if (!message) {
+    alert('commit訊息是空的，請先產生或自行輸入');
+    return;
+  }
+  if (
+    !confirm(
+      `確定要在這個專案的本地git執行commit嗎？(會把目前所有未commit的變更一起加入這次commit)\n\n訊息內容：\n${message}`
+    )
+  ) {
+    return;
+  }
+  $('git-commit-status').textContent = '執行中...';
+  const result = await call(
+    window.api.git.commit(state.currentTicket.project_id, message),
+    (err) => {
+      $('git-commit-status').textContent = 'commit失敗：' + err;
+    }
+  );
+  if (!result) return;
+  $('git-commit-status').textContent = `已commit：${(result.commit || '').slice(0, 7)}（${result.repoPath}）`;
+  $('btn-do-git-commit').classList.add('hidden');
+}
+
+const TICKET_TYPE_LABELS = { bug: 'Bug回報', feature: '新增需求', optimize: '優化調整', inquiry: '詢問／諮詢', other: '其他' };
+
+// EIP總表類型(document_heads.type數字，順序對應parameter_setting_details.task_type：
+// 專案原案,客服報修,專案後續增加,bug,優化,新增,測試,詢問,調整,待報價)對應到本地工單類型標記，
+// 只用來給沒有手動設定過的工單提供一個「預設選中」，使用者仍可自行改掉、且改掉後就以本地保存的為準
+const EIP_TYPE_TO_LOCAL_TYPE = ['feature', 'bug', 'feature', 'bug', 'optimize', 'feature', 'other', 'inquiry', 'optimize', 'other'];
+
+function defaultLocalTypeFor(ticket) {
+  if (ticket.type === null || ticket.type === undefined) return '';
+  return EIP_TYPE_TO_LOCAL_TYPE[ticket.type] || '';
+}
+
+async function onTicketTypeChange() {
+  if (!state.currentTicket) return;
+  const type = $('ticket-type-select').value;
+  await window.api.ticketMeta.setType(state.currentTicket.id, type);
+}
+
+function applyReplyTemplate() {
+  const type = $('ticket-type-select').value;
+  if (!type) {
+    alert('請先選擇工單類型');
+    return;
+  }
+  const template = (state.settings && state.settings.replyTemplates && state.settings.replyTemplates[type]) || '';
+  if (!template) {
+    alert(`「${TICKET_TYPE_LABELS[type]}」還沒有設定範本，可以到設定頁的「回覆範本」填寫`);
+    return;
+  }
+  if ($('reply-info').value.trim() && !confirm('回覆內容已經有文字了，套用範本會覆蓋掉，確定嗎？')) {
+    return;
+  }
+  $('reply-info').value = template;
+}
+
+async function submitReply() {
+  if (!state.currentTicket) return;
+  const info = $('reply-info').value.trim();
+  const status = $('reply-status').value;
+  const transferTo = status === '10' ? $('reply-transfer-to').value : '';
+  if (!info) {
+    $('detail-message').textContent = '請先填寫回覆內容';
+    return;
+  }
+
+  // 送出前先把計時器停下來，鎖定這次的實際工時
+  const stopped = await call(window.api.timer.stop(state.currentTicket.id));
+
+  const payload = {
+    info,
+    status,
+    transfer_to: transferTo,
+    fileid: state.pendingFileIds.join(','),
+    work_start_time: stopped ? stopped.firstStart : undefined,
+    work_end_time: stopped ? stopped.lastEnd : undefined,
+    actual_duration_seconds: stopped ? stopped.totalSeconds : undefined,
+  };
+
+  const result = await call(window.api.eip.replyTicket(state.currentTicket.id, payload), (err) => {
+    $('detail-message').textContent = '送出失敗：' + err;
+  });
+  if (!result) return;
+
+  state.pendingFileIds = [];
+  await window.api.timer.reset(state.currentTicket.id);
+  delete state.timers[state.currentTicket.id];
+  $('detail-message').textContent = '已送出，回到清單...';
+  setTimeout(backToList, 800);
+}
+
+// ---------------- 綁定事件 ----------------
+
+window.api.notification.onShow(showAppNotification);
+$('btn-close-app-notification').addEventListener('click', () => $('app-notification').classList.add('hidden'));
+$('btn-settings').addEventListener('click', () => $('settings-panel').classList.toggle('hidden'));
+$('btn-refresh').addEventListener('click', refreshAll);
+$('btn-save-settings').addEventListener('click', saveSettings);
+$('btn-test-connection').addEventListener('click', testConnection);
+$('btn-login').addEventListener('click', doLogin);
+$('btn-open-install-search').addEventListener('click', openInstallPanel);
+$('btn-install-back').addEventListener('click', closeInstallPanel);
+$('btn-open-ticket-search').addEventListener('click', () => openTicketSearchPanel());
+$('btn-ticket-search-back').addEventListener('click', closeTicketSearchPanel);
+$('btn-ticket-search-detail-close').addEventListener('click', closeTicketSearchDetail);
+$('ticket-search-query').addEventListener('input', () => {
+  clearTimeout(ticketSearchTimer);
+  const q = $('ticket-search-query').value;
+  ticketSearchTimer = setTimeout(() => runTicketSearch(q), 300);
+});
+$('btn-toggle-adv-search').addEventListener('click', toggleAdvSearchPanel);
+$('btn-adv-search').addEventListener('click', applyAdvSearch);
+$('adv-keyword').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyAdvSearch();
+});
+$('btn-adv-clear').addEventListener('click', () => resetAdvSearchState(false));
+$('btn-ts-prev-page').addEventListener('click', () => {
+  if (state.advSearch.lastMeta && state.advSearch.lastMeta.current_page > 1) {
+    runAdvancedTicketSearch(state.advSearch.lastMeta.current_page - 1).then(renderAdvChips);
+  }
+});
+$('btn-ts-next-page').addEventListener('click', () => {
+  if (state.advSearch.lastMeta && state.advSearch.lastMeta.current_page < state.advSearch.lastMeta.last_page) {
+    runAdvancedTicketSearch(state.advSearch.lastMeta.current_page + 1).then(renderAdvChips);
+  }
+});
+bindAdvSiteInput();
+$('btn-jump-to-site').addEventListener('click', jumpToSiteFromTicket);
+$('install-search').addEventListener('input', () => {
+  clearTimeout(installSearchTimer);
+  const q = $('install-search').value;
+  installSearchTimer = setTimeout(() => runInstallSearch(q), 300);
+});
+$('btn-test-mail').addEventListener('click', testMailConnection);
+$('btn-add-todo').addEventListener('click', () => openTodoForm());
+$('btn-save-todo').addEventListener('click', () => saveTodo());
+$('btn-cancel-todo').addEventListener('click', resetTodoForm);
+$('btn-todo-history').addEventListener('click', openTodoHistory);
+$('btn-todo-history-close').addEventListener('click', closeTodoHistory);
+$('todo-history-backdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'todo-history-backdrop') closeTodoHistory();
+});
+$('todo-history-search').addEventListener('input', () => renderTodoHistory($('todo-history-search').value));
+$('todo-list').addEventListener('click', (e) => {
+  const item = e.target.closest('.todo-item');
+  if (!item) return;
+  const id = item.dataset.todoId;
+  const todo = state.todos.find((entry) => entry.id === id);
+  if (!todo) return;
+  if (e.target.closest('.btn-edit-todo')) openTodoForm(todo);
+  if (e.target.closest('.btn-delete-todo')) deleteTodo(id);
+});
+$('todo-list').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('todo-check')) return;
+  const item = e.target.closest('.todo-item');
+  const todo = state.todos.find((entry) => entry.id === item.dataset.todoId);
+  if (!todo) return;
+  const previous = todo.completed;
+  todo.completed = e.target.checked;
+  call(window.api.todo.save(todo), (err) => {
+    todo.completed = previous;
+    renderTodoList();
+    alert('更新待辦失敗：' + err);
+  }).then((saved) => {
+    if (!saved) return;
+    Object.assign(todo, saved);
+    renderTodoList();
+  });
+});
+$('btn-mail-modal-close').addEventListener('click', closeMailModal);
+$('mail-modal-backdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'mail-modal-backdrop') closeMailModal();
+});
+$('btn-calendar-prev').addEventListener('click', () => changeCalendarMonth(-1));
+$('btn-calendar-next').addEventListener('click', () => changeCalendarMonth(1));
+$('btn-calendar-today').addEventListener('click', goToCurrentMonth);
+$('btn-toggle-add-event').addEventListener('click', () => {
+  if ($('add-event-form').classList.contains('hidden')) {
+    openAddEventForm();
+  } else {
+    cancelEventForm();
+  }
+});
+$('btn-cancel-event').addEventListener('click', cancelEventForm);
+$('btn-delete-event').addEventListener('click', deleteCurrentEvent);
+$('btn-submit-new-event').addEventListener('click', submitNewEvent);
+$('btn-back').addEventListener('click', backToList);
+$('btn-copy-id').addEventListener('click', () => window.api.clipboard.copy(state.currentTicket.id));
+$('btn-view-ticket-full').addEventListener('click', viewCurrentTicketFull);
+$('btn-copy-commit').addEventListener('click', () => window.api.clipboard.copy($('reply-commit-message').value));
+$('btn-save-project-path').addEventListener('click', saveProjectPath);
+$('set-hotkey').addEventListener('keydown', onHotkeyCapture);
+$('btn-clear-hotkey').addEventListener('click', () => {
+  $('set-hotkey').value = '';
+  $('set-hotkey').focus();
+});
+$('btn-generate').addEventListener('click', generateAiReply);
+$('btn-pick-attach-file').addEventListener('click', pickAndUploadForDetail);
+$('ticket-type-select').addEventListener('change', onTicketTypeChange);
+$('btn-apply-template').addEventListener('click', applyReplyTemplate);
+document
+  .querySelectorAll('input[name="git-source-mode"]')
+  .forEach((el) => el.addEventListener('change', onGitSourceModeChange));
+$('btn-load-commits').addEventListener('click', loadCommitsList);
+$('btn-do-git-commit').addEventListener('click', confirmGitCommit);
+$('ticket-search').addEventListener('input', () => {
+  state.searchQuery = $('ticket-search').value;
+  renderTicketList();
+});
+document.querySelectorAll('.tab-btn').forEach((el) => {
+  el.addEventListener('click', () => switchTab(el.dataset.tab));
+});
+$('btn-submit-reply').addEventListener('click', submitReply);
+$('reply-status').addEventListener('change', () => {
+  $('reply-transfer-to-label').classList.toggle('hidden', $('reply-status').value !== '10');
+});
+
+$('btn-batch-open').addEventListener('click', openBatchPanel);
+$('btn-batch-clear').addEventListener('click', clearSelection);
+$('btn-batch-back').addEventListener('click', backFromBatch);
+$('btn-batch-submit').addEventListener('click', submitBatch);
+$('batch-reply-status').addEventListener('change', () => {
+  $('batch-transfer-to-label').classList.toggle('hidden', $('batch-reply-status').value !== '10');
+});
+
+$('btn-timer-manual-toggle').addEventListener('click', openManualForm);
+$('manual-start').addEventListener('change', autoFillManualDuration);
+$('manual-end').addEventListener('change', autoFillManualDuration);
+$('btn-manual-apply').addEventListener('click', applyManualTime);
+$('btn-manual-clear').addEventListener('click', clearManualTime);
+$('btn-manual-cancel').addEventListener('click', () => $('timer-manual-form').classList.add('hidden'));
+$('btn-timer-start').addEventListener('click', () => onCardTimerAction(state.currentTicket.id, 'start'));
+$('btn-timer-pause').addEventListener('click', () => onCardTimerAction(state.currentTicket.id, 'pause'));
+$('btn-timer-stop').addEventListener('click', () => onCardTimerAction(state.currentTicket.id, 'stop'));
+
+// ---------------- 統一重新整理 + 自動倒數重整 ----------------
+
+const AUTO_REFRESH_SECONDS = 120; // 每2分鐘自動重整一次工單/信箱/行事曆
+let autoRefreshRemaining = AUTO_REFRESH_SECONDS;
+let autoRefreshInFlight = false;
+
+function updateRefreshCountdownDisplay() {
+  $('refresh-countdown').textContent = `${autoRefreshRemaining}s`;
+}
+
+async function refreshAll({ notify = false } = {}) {
+  if (autoRefreshInFlight) return;
+  autoRefreshInFlight = true;
+  try {
+    const changes = await Promise.all([refreshTicketList(), refreshMail(), refreshCalendar()]);
+    if (notify) {
+      const changed = changes.filter((item) => item && item.count > 0);
+      if (changed.length) {
+        const body = changed.map((item) => `${item.label}新增${item.count}筆`).join('、');
+        await call(window.api.notification.show({ title: '有新的資訊', body }));
+      }
+    }
+    state.refreshSnapshot.initialized = true;
+  } finally {
+    autoRefreshInFlight = false;
+    autoRefreshRemaining = AUTO_REFRESH_SECONDS;
+    updateRefreshCountdownDisplay();
+  }
+}
+
+function tickAutoRefresh() {
+  if (autoRefreshRemaining > 0) autoRefreshRemaining -= 1;
+  if (autoRefreshRemaining === 0 && !autoRefreshInFlight) {
+    refreshAll({ notify: true });
+  }
+  updateRefreshCountdownDisplay();
+}
+
+(async function init() {
+  state.tickInterval = setInterval(tick, 1000);
+  setInterval(tickAutoRefresh, 1000);
+  await loadSettingsIntoForm();
+  const whoamiResult = await call(window.api.eip.whoami());
+  if (whoamiResult) state.currentUserId = whoamiResult.id;
+  await Promise.all([refreshAll(), loadTodos()]);
+})();
