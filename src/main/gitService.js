@@ -71,6 +71,47 @@ async function getCommitsDetail(projectId, hashes) {
   return { repoPath, commits };
 }
 
+const STATUS_LABELS = { A: '新增', M: '修改', D: '刪除', T: '型態變更' };
+
+// 給畫面展開單筆commit用：完整訊息(含內文)＋涉及的檔案清單(狀態、新增/刪除行數)。
+// 關掉rename偵測讓每個檔案各佔一行，路徑不引號跳脫才能正確顯示中文檔名
+async function getCommitFiles(projectId, hash) {
+  const git = repo(resolveRepoPath(projectId));
+  const base = ['-c', 'core.quotePath=false', 'show', '--no-renames', '--format='];
+  const message = (await git.show(['-s', '--format=%B', hash])).trim();
+  const nameStatus = await git.raw([...base, '--name-status', hash]);
+  const numstat = await git.raw([...base, '--numstat', hash]);
+
+  const stats = {};
+  numstat.split('\n').filter(Boolean).forEach((line) => {
+    const [add, del, ...rest] = line.split('\t');
+    stats[rest.join('\t')] = { additions: add === '-' ? null : Number(add), deletions: del === '-' ? null : Number(del) };
+  });
+  const files = nameStatus.split('\n').filter(Boolean).map((line) => {
+    const [status, ...rest] = line.split('\t');
+    const path = rest.join('\t');
+    const s = stats[path] || {};
+    return {
+      path,
+      status: status[0],
+      statusLabel: STATUS_LABELS[status[0]] || status[0],
+      additions: s.additions === undefined ? null : s.additions,
+      deletions: s.deletions === undefined ? null : s.deletions,
+    };
+  });
+  return { message, files };
+}
+
+// 單一檔案在該commit的異動內容，點開檔案才讀取，避免一次撈全部diff太慢
+async function getCommitFileDiff(projectId, hash, filePath) {
+  const git = repo(resolveRepoPath(projectId));
+  // 檔案清單裡的路徑一律是「從git倉庫根目錄算起」，但專案設定的git路徑可能是倉庫底下的子資料夾，
+  // pathspec預設又是相對目前資料夾，兩邊對不上就會撈到空白diff；用:(top)明確指定從根目錄算，:(literal)避免檔名含*?[被當萬用字元
+  const diff = await git.raw(['-c', 'core.quotePath=false', 'show', '--no-renames', '--format=', hash, '--', `:(top,literal)${filePath}`]);
+  const limit = 200000;
+  return diff.length > limit ? diff.slice(0, limit) + '\n...(內容過長，已截斷)' : diff;
+}
+
 // 實際執行commit：把目前所有未commit的變更加進去，用AI產生(或使用者編輯過)的訊息送出，
 // 呼叫前renderer那邊一定要先讓使用者看過訊息、明確按下確認按鈕才會走到這裡
 async function commitAll(projectId, message) {
@@ -81,4 +122,4 @@ async function commitAll(projectId, message) {
   return { repoPath, commit: result.commit || null, summary: result.summary };
 }
 
-module.exports = { collectChanges, resolveRepoPath, listCommits, getCommitsDetail, commitAll };
+module.exports = { collectChanges, resolveRepoPath, listCommits, getCommitsDetail, getCommitFiles, getCommitFileDiff, commitAll };

@@ -339,7 +339,9 @@ handle('git:collect-changes', (sinceIso, projectId) => gitService.collectChanges
 handle('git:resolve-path', (projectId) => gitService.resolveRepoPath(projectId));
 handle('git:list-commits', (projectId, limit) => gitService.listCommits(projectId, limit));
 handle('git:get-commits-detail', (projectId, hashes) => gitService.getCommitsDetail(projectId, hashes));
-handle('git:commit', (projectId, message) => gitService.commitAll(projectId, message));
+handle('git:get-commit-files', (projectId, hash) => gitService.getCommitFiles(projectId, hash));
+handle('git:get-commit-file-diff', (projectId, hash, filePath) => gitService.getCommitFileDiff(projectId, hash, filePath));
+handle('git:commit',(projectId, message) => gitService.commitAll(projectId, message));
 
 handle('llm:generate-reply', (params) => llmService.generateTicketReply(params));
 handle('llm:generate-batch-reply', (params) => llmService.generateBatchReply(params));

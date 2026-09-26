@@ -543,6 +543,21 @@
       </div>
     </div>
 
+    <div id="commit-modal-backdrop" class="modal-backdrop hidden">
+      <div class="modal-box commit-modal-box">
+        <div class="modal-header">
+          <h2 id="commit-modal-title"></h2>
+          <button id="btn-commit-modal-close" title="關閉(Esc)">✕</button>
+        </div>
+        <pre id="commit-modal-msg" class="git-commit-fullmsg"></pre>
+        <div id="commit-modal-summary" class="meta"></div>
+        <div class="commit-modal-body">
+          <div id="commit-modal-files"></div>
+          <pre id="commit-modal-diff"></pre>
+        </div>
+      </div>
+    </div>
+
     <div id="todo-history-backdrop" class="modal-backdrop hidden">
       <div class="modal-box">
         <div class="modal-header">

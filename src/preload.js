@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('api', {
     resolvePath: invoke('git:resolve-path'),
     listCommits: invoke('git:list-commits'),
     getCommitsDetail: invoke('git:get-commits-detail'),
+    getCommitFiles: invoke('git:get-commit-files'),
+    getCommitFileDiff: invoke('git:get-commit-file-diff'),
     commit: invoke('git:commit'),
   },
   llm: {

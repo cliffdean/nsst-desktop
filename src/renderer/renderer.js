@@ -1840,17 +1840,8 @@ async function loadBatchCommitsList() {
     $('batch-git-commits-list').innerHTML = '<p class="meta">這個專案的git路徑裡沒有提交紀錄</p>';
     return;
   }
-  $('batch-git-commits-list').innerHTML = commits
-    .map(
-      (c) => `
-      <label class="git-commit-row">
-        <input type="checkbox" value="${c.hash}" />
-        <span class="git-commit-hash">${c.shortHash}</span>
-        <span class="git-commit-date">${escapeHtml(String(c.date).slice(0, 16))}</span>
-        <span class="git-commit-msg">${escapeHtml(c.message.split('\n')[0])}</span>
-      </label>`
-    )
-    .join('');
+  $('batch-git-commits-list').innerHTML = commitListHtml(commits);
+  bindCommitList($('batch-git-commits-list'), selected[0].project_id);
 }
 
 async function generateBatchAiReply() {
@@ -2353,18 +2344,131 @@ async function loadCommitsList() {
     $('git-commits-list').innerHTML = '<p class="meta">這個專案的git路徑裡沒有提交紀錄</p>';
     return;
   }
-  $('git-commits-list').innerHTML = commits
-    .map(
-      (c) => `
-      <label class="git-commit-row">
-        <input type="checkbox" value="${c.hash}" />
-        <span class="git-commit-hash">${c.shortHash}</span>
-        <span class="git-commit-date">${escapeHtml(String(c.date).slice(0, 16))}</span>
-        <span class="git-commit-msg">${escapeHtml(c.message.split('\n')[0])}</span>
-      </label>`
-    )
+  $('git-commits-list').innerHTML = commitListHtml(commits);
+  bindCommitList($('git-commits-list'), state.currentTicket.project_id);
+}
+
+// ---- commit清單(單張詳情與批次共用)：清單只負責勾選，「查看」開大彈窗看完整訊息、涉及檔案與各檔異動 ----
+
+function commitListHtml(commits) {
+  return commits
+    .map((c) => {
+      const subject = c.message.split('\n')[0];
+      return `
+      <div class="git-commit-item" data-hash="${c.hash}" data-short="${c.shortHash}" data-subject="${escapeHtml(subject)}">
+        <div class="git-commit-row">
+          <button type="button" class="git-commit-view" title="在彈窗中查看完整訊息、涉及檔案與異動內容">查看</button>
+          <label class="git-commit-main">
+            <input type="checkbox" value="${c.hash}" />
+            <span class="git-commit-hash">${c.shortHash}</span>
+            <span class="git-commit-date">${escapeHtml(String(c.date).slice(0, 16))}</span>
+            <span class="git-commit-msg" title="${escapeHtml(c.message)}">${escapeHtml(subject)}</span>
+          </label>
+        </div>
+      </div>`;
+    })
     .join('');
 }
+
+function bindCommitList(container, projectId) {
+  container.querySelectorAll('.git-commit-view').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const item = btn.closest('.git-commit-item');
+      openCommitModal(projectId, item.dataset.hash, item.dataset.short, item.dataset.subject);
+    });
+  });
+}
+
+const commitModal = { projectId: null, hash: null, seq: 0 };
+
+function closeCommitModal() {
+  $('commit-modal-backdrop').classList.add('hidden');
+}
+
+async function openCommitModal(projectId, hash, shortHash, subject) {
+  commitModal.projectId = projectId;
+  commitModal.hash = hash;
+  commitModal.seq++;
+  $('commit-modal-title').textContent = `${shortHash}　${subject}`;
+  $('commit-modal-msg').textContent = '';
+  $('commit-modal-summary').textContent = '';
+  $('commit-modal-files').innerHTML = '<p class="meta">讀取中...</p>';
+  $('commit-modal-diff').textContent = '';
+  $('commit-modal-backdrop').classList.remove('hidden');
+
+  const info = await call(window.api.git.getCommitFiles(projectId, hash), (err) => {
+    $('commit-modal-files').innerHTML = `<p style="color:#c0392b;">讀取失敗：${escapeHtml(err)}</p>`;
+  });
+  if (!info || commitModal.hash !== hash) return;
+
+  $('commit-modal-msg').textContent = info.message;
+  const totalAdd = info.files.reduce((s, f) => s + (f.additions || 0), 0);
+  const totalDel = info.files.reduce((s, f) => s + (f.deletions || 0), 0);
+  $('commit-modal-summary').innerHTML = `共 ${info.files.length} 個檔案　<span class="git-add">+${totalAdd}</span> <span class="git-del">-${totalDel}</span>`;
+
+  if (!info.files.length) {
+    $('commit-modal-files').innerHTML = '<p class="meta">沒有異動檔案(可能是merge commit)</p>';
+    return;
+  }
+  $('commit-modal-files').innerHTML = info.files
+    .map(
+      (f) => `
+      <div class="git-file-row" data-path="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
+        <span class="git-file-status git-file-status-${escapeHtml(f.status)}">${escapeHtml(f.statusLabel)}</span>
+        <span class="git-file-path">${escapeHtml(f.path)}</span>
+        <span class="git-file-stat">${
+          f.additions === null ? '二進位' : `<span class="git-add">+${f.additions}</span> <span class="git-del">-${f.deletions}</span>`
+        }</span>
+      </div>`
+    )
+    .join('');
+  const rows = $('commit-modal-files').querySelectorAll('.git-file-row');
+  rows.forEach((row) => row.addEventListener('click', () => showCommitFileDiff(row, rows)));
+  showCommitFileDiff(rows[0], rows);
+}
+
+async function showCommitFileDiff(row, allRows) {
+  allRows.forEach((r) => r.classList.toggle('active', r === row));
+  const pre = $('commit-modal-diff');
+  const seq = ++commitModal.seq;
+  pre.scrollTop = 0;
+  pre.textContent = '讀取中...';
+
+  let diff;
+  try {
+    const res = await window.api.git.getCommitFileDiff(commitModal.projectId, commitModal.hash, row.dataset.path);
+    if (!res.ok) throw new Error(res.error);
+    diff = res.data;
+  } catch (err) {
+    if (seq === commitModal.seq) pre.textContent = '讀取失敗：' + (err && err.message ? err.message : err);
+    return;
+  }
+  if (seq !== commitModal.seq) return; // 使用者已經點了別的檔案，這份結果作廢
+  if (typeof diff !== 'string' || !diff.trim()) {
+    pre.textContent = '(這個檔案在此commit沒有可顯示的文字異動，可能是二進位檔或只有權限/模式變更)';
+    return;
+  }
+  // 逐行用textContent建立節點，不組HTML字串，內容含任何特殊字元都不會被當成標籤
+  const frag = document.createDocumentFragment();
+  diff.split('\n').forEach((line, i, all) => {
+    const span = document.createElement('span');
+    if (line.startsWith('+') && !line.startsWith('+++')) span.className = 'git-add';
+    else if (line.startsWith('-') && !line.startsWith('---')) span.className = 'git-del';
+    else if (line.startsWith('@@')) span.className = 'git-hunk';
+    span.textContent = line + (i < all.length - 1 ? '\n' : '');
+    frag.appendChild(span);
+  });
+  pre.textContent = '';
+  pre.appendChild(frag);
+}
+
+$('btn-commit-modal-close').addEventListener('click', closeCommitModal);
+$('commit-modal-backdrop').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeCommitModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeCommitModal();
+});
 
 async function generateAiReply() {
   if (!state.currentTicket) return;

@@ -588,9 +588,26 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .git-source-toggle { display: flex; gap: 16px; font-size: 13px; margin-bottom: 8px; }
 .git-source-toggle label { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
 #git-commits-box { margin-bottom: 10px; }
-#git-commits-list { max-height: 220px; overflow-y: auto; border: 1px solid #e3e6eb; border-radius: 4px; padding: 4px; margin-top: 6px; background: #fafbfc; }
-.git-commit-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; font-size: 12px; border-bottom: 1px solid #eef0f3; cursor: pointer; }
-.git-commit-row:last-child { border-bottom: none; }
+#git-commits-list, #batch-git-commits-list { max-height: 380px; overflow-y: auto; border: 1px solid #e3e6eb; border-radius: 4px; padding: 4px; margin-top: 6px; background: #fafbfc; }
+.git-commit-item { border-bottom: 1px solid #eef0f3; }
+.git-commit-item:last-child { border-bottom: none; }
+.git-commit-row { display: flex; align-items: baseline; gap: 6px; padding: 4px 6px; font-size: 12px; }
+/* 前面加.content-view才壓得過通用的「.content-view label」(display:block、margin、粗體)與「.content-view input」(width:100%) */
+.content-view .git-commit-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; margin: 0; font-weight: normal; cursor: pointer; }
+.content-view .git-commit-main input { width: auto; margin: 0; flex: 0 0 auto; }
+.git-commit-view { flex: 0 0 auto; padding: 1px 8px; font-size: 11px; }
+.git-commit-fullmsg { margin: 0 0 6px; padding: 6px 8px; background: #fff; border: 1px solid #e3e6eb; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12px; }
+.git-file-row { display: flex; align-items: baseline; gap: 8px; padding: 2px 4px; cursor: pointer; border-radius: 3px; }
+.git-file-row:hover { background: #eef3fb; }
+.git-file-status { flex: 0 0 auto; font-size: 11px; padding: 0 5px; border-radius: 8px; background: #eef1f6; color: #667; }
+.git-file-status-A { background: #e4f4ea; color: #2f8a4f; }
+.git-file-status-D { background: #fbe6e6; color: #c94f4f; }
+.git-file-status-M { background: #fdf1e0; color: #b6720c; }
+.git-file-path { flex: 1 1 auto; min-width: 0; font-family: monospace; word-break: break-all; }
+.git-file-stat { flex: 0 0 auto; font-family: monospace; color: #888; }
+.git-add { color: #2f8a4f; }
+.git-del { color: #c94f4f; }
+.git-hunk { color: #2f6fd8; }
 .git-commit-hash { font-family: monospace; color: #2f6fd8; flex: 0 0 auto; }
 .git-commit-date { color: #888; flex: 0 0 auto; white-space: nowrap; }
 .git-commit-msg { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -610,3 +627,13 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 #batch-bar button { border: none; }
 #batch-bar-text { flex: 1; font-size: 12px; }
 #batch-panel-list { background: #fff; border: 1px solid #e2e5ea; border-radius: 4px; padding: 8px; }
+
+/* commit查看彈窗：左邊檔案清單、右邊異動內容，兩欄各自捲動，比清單內嵌展開寬敞很多 */
+.commit-modal-box { width: min(1400px, 96vw); height: 92vh; max-height: 92vh; }
+.commit-modal-box .modal-header h2 { flex: 1; font-size: 14px; word-break: break-word; }
+#commit-modal-msg { margin: 8px 0 4px; max-height: 22vh; overflow: auto; }
+#commit-modal-summary { margin-bottom: 6px; }
+.commit-modal-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 8px; }
+#commit-modal-files { flex: 0 0 34%; min-width: 0; overflow: auto; border: 1px solid #e3e6eb; border-radius: 4px; padding: 4px; background: #fafbfc; font-size: 12px; }
+#commit-modal-diff { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid #e3e6eb; border-radius: 4px; background: #fff; font-family: Consolas, monospace; font-size: 12px; white-space: pre; }
+.git-file-row.active { background: #dbe7fb; }
