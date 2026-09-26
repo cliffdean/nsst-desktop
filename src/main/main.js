@@ -342,6 +342,7 @@ handle('git:get-commits-detail', (projectId, hashes) => gitService.getCommitsDet
 handle('git:commit', (projectId, message) => gitService.commitAll(projectId, message));
 
 handle('llm:generate-reply', (params) => llmService.generateTicketReply(params));
+handle('llm:generate-batch-reply', (params) => llmService.generateBatchReply(params));
 
 handle('mail:list-recent', (limit) => mailService.listRecent(limit));
 handle('mail:get-message', (uid) => mailService.getMessage(uid));

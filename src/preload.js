@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   llm: {
     generateReply: invoke('llm:generate-reply'),
+    generateBatchReply: invoke('llm:generate-batch-reply'),
   },
   mail: {
     listRecent: invoke('mail:list-recent'),

@@ -1177,7 +1177,8 @@ function ticketInfoRows(rows) {
 }
 
 // 一則回覆：回覆人／時間／當時標記的狀態、實際工作時段與耗時、回覆內容(EIP富文本HTML)、附檔
-function ticketReplyHtml(r) {
+// collapsible=true時(左側工單詳情)：預設收起，只留回覆頭一行，點擊後才展開內容，避免回覆一多畫面被拉得很長
+function ticketReplyHtml(r, collapsible = false) {
   const workStart = validTime(r.work_start_time);
   const workEnd = validTime(r.work_end_time);
   const duration = Number(r.actual_duration_seconds) > 0 ? formatSeconds(r.actual_duration_seconds) : '';
@@ -1187,16 +1188,37 @@ function ticketReplyHtml(r) {
   const files = (r.files || [])
     .map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`)
     .join('');
-  return `<div class="ts-reply">
-    <div class="ts-reply-head">
+  return `<div class="ts-reply${collapsible ? ' collapsed' : ''}">
+    <div class="ts-reply-head"${collapsible ? ' data-toggle="reply"' : ''}>
+      ${collapsible ? '<span class="ts-reply-caret"></span>' : ''}
       <strong>${escapeHtml(r.user_name || '(未知)')}</strong>
       <span>${escapeHtml(r.created_at || '')}</span>
       ${r.status_text ? `<span class="status-badge status-default">${escapeHtml(r.status_text)}</span>` : ''}
     </div>
-    ${workLine}
-    <div class="ts-reply-body">${r.reply || '(無內容)'}</div>
-    ${files}
+    <div class="ts-reply-content">
+      ${workLine}
+      <div class="ts-reply-body">${r.reply || '(無內容)'}</div>
+      ${files}
+    </div>
   </div>`;
+}
+
+// 收合式回覆列表點擊展開/收起：一次綁在容器上即可，不用每則回覆分別綁
+function bindReplyToggles(container) {
+  container.querySelectorAll('.ts-reply-head[data-toggle="reply"]').forEach((head) => {
+    head.addEventListener('click', () => head.closest('.ts-reply').classList.toggle('collapsed'));
+  });
+}
+
+// 左側工單詳情的回覆記錄：跟右側工單查詢共用同一份資料與排版，只是預設收合
+function renderReplies(ticket) {
+  const replies = ticket.replies || [];
+  $('detail-reply-count').textContent = replies.length ? `（共 ${replies.length} 則，點擊展開）` : '';
+  $('detail-replies-list').innerHTML = replies.length
+    ? replies.map((r) => ticketReplyHtml(r, true)).join('')
+    : '<span style="color:#888;font-size:12px;">目前沒有回覆記錄</span>';
+  bindAttachmentLinks($('detail-replies-list'));
+  bindReplyToggles($('detail-replies-list'));
 }
 
 // 右側詳情：欄位順序與名稱對齊EIP總表；所有代碼(狀態/類型/人員ID等)都已由後端轉成文字，這裡不顯示任何裸ID
@@ -1720,7 +1742,7 @@ function clearSelection() {
   renderTicketList();
 }
 
-function openBatchPanel() {
+async function openBatchPanel() {
   const selected = selectedTickets();
   if (selected.length < 2) return;
 
@@ -1729,10 +1751,23 @@ function openBatchPanel() {
   $('batch-panel').classList.remove('hidden');
   $('batch-panel-list').textContent = selected.map((t) => `#${t.id} ${t.summary || ''}`).join('、');
   $('batch-reply-info').value = '';
+  $('batch-reply-commit-message').value = '';
   const isQcStage = !!selected[0].is_qc_stage;
   $('batch-reply-status').innerHTML = buildStatusOptionsHtml(isQcStage, selected[0].status);
   $('batch-transfer-to-label').classList.add('hidden');
   $('batch-message').textContent = '';
+
+  // 批次的回覆範本類型預設帶第一張工單已設定的本地類型(沒設定過就照EIP類型猜)，使用者仍可自行改
+  const savedType = await call(window.api.ticketMeta.getType(selected[0].id));
+  $('batch-reply-type').value = savedType || defaultLocalTypeFor(selected[0]);
+
+  $('batch-git-mode-uncommitted').checked = true;
+  $('batch-git-commits-box').classList.add('hidden');
+  $('batch-git-commits-list').innerHTML = '';
+  $('batch-git-extra-note').value = '';
+  $('batch-ai-status').textContent = '';
+
+  renderBatchTimeList(selected);
 }
 
 function backFromBatch() {
@@ -1783,6 +1818,106 @@ async function submitBatch() {
   }
 }
 
+// 批次的AI產生回覆：跟單張工單詳情共用同一套git來源選擇邏輯(未commit變更／已commit的commit)，
+// 差別在這裡的來源是「選取的多張工單共用同一個專案」，回覆內容也是產生「一份」共用文字
+function onBatchGitSourceModeChange() {
+  const mode = document.querySelector('input[name="batch-git-source-mode"]:checked').value;
+  $('batch-git-commits-box').classList.toggle('hidden', mode !== 'commits');
+}
+
+async function loadBatchCommitsList() {
+  const selected = selectedTickets();
+  if (selected.length < 2) return;
+  $('batch-git-commits-list').innerHTML = '<p class="meta">讀取中...</p>';
+  const commits = await call(
+    window.api.git.listCommits(selected[0].project_id, 30),
+    (err) => {
+      $('batch-git-commits-list').innerHTML = `<p style="color:#c0392b;">${escapeHtml(err)}</p>`;
+    }
+  );
+  if (!commits) return;
+  if (!commits.length) {
+    $('batch-git-commits-list').innerHTML = '<p class="meta">這個專案的git路徑裡沒有提交紀錄</p>';
+    return;
+  }
+  $('batch-git-commits-list').innerHTML = commits
+    .map(
+      (c) => `
+      <label class="git-commit-row">
+        <input type="checkbox" value="${c.hash}" />
+        <span class="git-commit-hash">${c.shortHash}</span>
+        <span class="git-commit-date">${escapeHtml(String(c.date).slice(0, 16))}</span>
+        <span class="git-commit-msg">${escapeHtml(c.message.split('\n')[0])}</span>
+      </label>`
+    )
+    .join('');
+}
+
+async function generateBatchAiReply() {
+  const selected = selectedTickets();
+  if (selected.length < 2) return;
+  $('batch-ai-status').textContent = 'AI產生中，請稍候...(git讀取+LLM，可能需要幾秒到數十秒)';
+
+  const mode = document.querySelector('input[name="batch-git-source-mode"]:checked').value;
+  const projectId = selected[0].project_id;
+  let source;
+
+  if (mode === 'commits') {
+    const checked = Array.from($('batch-git-commits-list').querySelectorAll('input[type="checkbox"]:checked')).map(
+      (el) => el.value
+    );
+    if (!checked.length) {
+      $('batch-ai-status').textContent = '請先載入並勾選至少一筆commit';
+      return;
+    }
+    const detail = await call(window.api.git.getCommitsDetail(projectId, checked), (err) => {
+      $('batch-ai-status').textContent = '讀取Git commit失敗：' + err;
+    });
+    if (!detail) return;
+    source = { mode: 'commits', commits: detail.commits };
+  } else {
+    const gitChanges = await call(window.api.git.collectChanges(null, projectId), (err) => {
+      $('batch-ai-status').textContent = '讀取Git失敗：' + err;
+    });
+    if (!gitChanges) return;
+    source = { mode: 'uncommitted', ...gitChanges };
+  }
+
+  // 批次列表(state.tickets)本身沒有description，AI要寫回覆需要每張單真正的需求說明，逐張補抓完整資料
+  const tickets = [];
+  for (const t of selected) {
+    const full = await call(window.api.eip.getTicket(t.id), (err) => {
+      $('batch-ai-status').textContent = `讀取工單#${t.id}失敗：${err}`;
+    });
+    if (!full) return;
+    tickets.push(full);
+  }
+
+  const type = $('batch-reply-type').value;
+  const templateText = (type && state.settings.replyTemplates && state.settings.replyTemplates[type]) || '';
+  const typeLabel = TICKET_TYPE_LABELS[type] || '';
+  const durationSeconds = selected.reduce((sum, t) => sum + liveSecondsOf(state.timers[t.id]), 0);
+
+  const result = await call(
+    window.api.llm.generateBatchReply({
+      tickets,
+      source,
+      durationSeconds,
+      userNote: $('batch-git-extra-note').value.trim(),
+      templateText,
+      typeLabel,
+    }),
+    (err) => {
+      $('batch-ai-status').textContent = 'AI產生失敗：' + err;
+    }
+  );
+  if (!result) return;
+
+  $('batch-reply-info').value = result.reply || '';
+  $('batch-reply-commit-message').value = result.commitMessage || '';
+  $('batch-ai-status').textContent = '已產生，請自行確認/編輯後再送出(批次不會自動執行git commit，commit訊息請自行複製手動提交)。';
+}
+
 async function onCardTimerAction(ticketId, action) {
   const result = await call(window.api.timer[action](ticketId));
   if (!result) return;
@@ -1796,6 +1931,159 @@ async function onCardTimerAction(ticketId, action) {
   if (state.currentTicket && String(state.currentTicket.id) === String(ticketId)) {
     updateDetailTimerDisplay();
   }
+  if (!$('batch-panel').classList.contains('hidden')) {
+    renderBatchTimeList(selectedTickets());
+  }
+}
+
+// ---------------- 批次提交：各工單時間(逐張列出，可個別手動調整，套用後submitBatch會照各自的設定結算) ----------------
+
+function batchTimeRow(ticketId) {
+  return document.querySelector(`.batch-time-row[data-id="${ticketId}"]`);
+}
+
+function renderBatchTimeList(selected) {
+  $('batch-time-list').innerHTML = selected
+    .map((t) => {
+      const timer = state.timers[t.id];
+      const manual = timer && timer.manual;
+      const manualSummary = manual
+        ? `手動設定：${formatLocalDateTime(manual.start)} ~ ${formatLocalDateTime(manual.end)}，用時 ${formatSeconds(manual.seconds)}`
+        : '';
+      return `
+      <div class="batch-time-row" data-id="${t.id}">
+        <div class="batch-time-head">
+          <strong>#${t.id}</strong> <span>${escapeHtml(t.summary || '')}</span>
+        </div>
+        ${timerControlsHtml(t)}
+        ${manual ? `<p class="batch-time-manual-summary meta">${escapeHtml(manualSummary)}</p>` : ''}
+        <div class="actions">
+          <button type="button" class="btn-batch-time-manual-toggle" data-id="${t.id}">手動設定時間</button>
+          ${manual ? `<button type="button" class="btn-batch-manual-clear-outer" data-id="${t.id}">清除手動設定</button>` : ''}
+        </div>
+        <div class="batch-time-manual-form hidden">
+          <div class="manual-grid">
+            <label>開始時間 <input type="datetime-local" class="batch-manual-start" /></label>
+            <label>結束時間 <input type="datetime-local" class="batch-manual-end" /></label>
+            <label>用時
+              <span class="manual-duration"><input type="number" class="batch-manual-hours" min="0" step="1" /> 小時 <input type="number" class="batch-manual-minutes" min="0" max="59" step="1" /> 分</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="button" class="btn-batch-manual-apply" data-id="${t.id}">套用</button>
+            <button type="button" class="btn-batch-manual-cancel" data-id="${t.id}">收起</button>
+          </div>
+          <p class="batch-manual-message meta"></p>
+        </div>
+      </div>`;
+    })
+    .join('');
+  bindBatchTimeListEvents();
+}
+
+function bindBatchTimeListEvents() {
+  const container = $('batch-time-list');
+  container.querySelectorAll('.btn-card-start').forEach((el) => el.addEventListener('click', () => onCardTimerAction(el.dataset.id, 'start')));
+  container.querySelectorAll('.btn-card-pause').forEach((el) => el.addEventListener('click', () => onCardTimerAction(el.dataset.id, 'pause')));
+  container.querySelectorAll('.btn-card-stop').forEach((el) => el.addEventListener('click', () => onCardTimerAction(el.dataset.id, 'stop')));
+  container.querySelectorAll('.btn-batch-time-manual-toggle').forEach((el) => el.addEventListener('click', () => openBatchManualForm(el.dataset.id)));
+  container.querySelectorAll('.btn-batch-manual-clear-outer').forEach((el) => el.addEventListener('click', () => clearBatchManualTime(el.dataset.id)));
+  container.querySelectorAll('.btn-batch-manual-apply').forEach((el) => el.addEventListener('click', () => applyBatchManualTime(el.dataset.id)));
+  container.querySelectorAll('.btn-batch-manual-cancel').forEach((el) => el.addEventListener('click', () => closeBatchManualForm(el.dataset.id)));
+  container.querySelectorAll('.batch-manual-start, .batch-manual-end').forEach((el) => {
+    el.addEventListener('change', () => autoFillBatchManualDuration(el.closest('.batch-time-row')));
+  });
+}
+
+// 開啟某一張工單的手動設定表單：帶入邏輯跟單張工單詳情的openManualForm一致(已手動設定過就帶原值，
+// 否則有計時紀錄就帶入方便微調)，只是這裡改成操作該行自己的欄位，不影響其他工單
+function openBatchManualForm(ticketId) {
+  const row = batchTimeRow(ticketId);
+  if (!row) return;
+  const timer = state.timers[ticketId];
+  const manual = timer && timer.manual;
+  const formEl = row.querySelector('.batch-time-manual-form');
+  const startInput = formEl.querySelector('.batch-manual-start');
+  const endInput = formEl.querySelector('.batch-manual-end');
+  const hoursInput = formEl.querySelector('.batch-manual-hours');
+  const minutesInput = formEl.querySelector('.batch-manual-minutes');
+  const msgEl = formEl.querySelector('.batch-manual-message');
+  if (manual) {
+    startInput.value = toInputValue(manual.start);
+    endInput.value = toInputValue(manual.end);
+    hoursInput.value = Math.floor(manual.seconds / 3600);
+    minutesInput.value = Math.round((manual.seconds % 3600) / 60);
+    msgEl.textContent = '';
+  } else if (timer && timer.segments && timer.segments.length) {
+    const first = timer.segments[0];
+    const last = timer.segments[timer.segments.length - 1];
+    startInput.value = toInputValue(first.start);
+    endInput.value = toInputValue(last.end || new Date().toISOString());
+    const totalMinutes = Math.max(1, Math.floor(liveSecondsOf(timer) / 60));
+    hoursInput.value = Math.floor(totalMinutes / 60);
+    minutesInput.value = totalMinutes % 60;
+    msgEl.textContent = timer.status === 'running'
+      ? '已帶入目前計時記錄(計時中，結束時間為現在)；套用後會改成手動設定並停止計時'
+      : '已帶入計時器的記錄(暫停的時間已扣除)，可直接修改後套用';
+  } else {
+    startInput.value = '';
+    endInput.value = '';
+    hoursInput.value = '';
+    minutesInput.value = '';
+    msgEl.textContent = '';
+  }
+  formEl.classList.remove('hidden');
+}
+
+function closeBatchManualForm(ticketId) {
+  const row = batchTimeRow(ticketId);
+  if (row) row.querySelector('.batch-time-manual-form').classList.add('hidden');
+}
+
+// 起訖時間都填了就先用「結束−開始」帶入用時，使用者再依實際扣掉休息時間微調(跟單張詳情的autoFillManualDuration邏輯一致)
+function autoFillBatchManualDuration(row) {
+  if (!row) return;
+  const s = row.querySelector('.batch-manual-start').value;
+  const e = row.querySelector('.batch-manual-end').value;
+  if (!s || !e) return;
+  const diff = Math.round((new Date(e).getTime() - new Date(s).getTime()) / 1000);
+  if (diff <= 0) return;
+  row.querySelector('.batch-manual-hours').value = Math.floor(diff / 3600);
+  row.querySelector('.batch-manual-minutes').value = Math.floor((diff % 3600) / 60);
+}
+
+async function applyBatchManualTime(ticketId) {
+  const row = batchTimeRow(ticketId);
+  if (!row) return;
+  const formEl = row.querySelector('.batch-time-manual-form');
+  const msgEl = formEl.querySelector('.batch-manual-message');
+  const s = formEl.querySelector('.batch-manual-start').value;
+  const e = formEl.querySelector('.batch-manual-end').value;
+  if (!s || !e) {
+    msgEl.textContent = '請填開始與結束時間';
+    return;
+  }
+  const seconds =
+    (Number(formEl.querySelector('.batch-manual-hours').value) || 0) * 3600 +
+    (Number(formEl.querySelector('.batch-manual-minutes').value) || 0) * 60;
+  const timer = await call(
+    window.api.timer.setManual(ticketId, { start: new Date(s).toISOString(), end: new Date(e).toISOString(), seconds }),
+    (err) => {
+      msgEl.textContent = '設定失敗：' + err;
+    }
+  );
+  if (!timer) return;
+  state.timers[ticketId] = timer;
+  renderTicketList();
+  renderBatchTimeList(selectedTickets());
+}
+
+async function clearBatchManualTime(ticketId) {
+  const timer = await call(window.api.timer.clearManual(ticketId));
+  if (!timer) return;
+  state.timers[ticketId] = timer;
+  renderTicketList();
+  renderBatchTimeList(selectedTickets());
 }
 
 // 每秒只更新畫面上的數字，不重新整理整個清單(避免閃爍、也不用一直問main process)
@@ -2009,6 +2297,7 @@ async function openTicketDetail(id) {
   $('pending-files-text').textContent = '';
   state.pendingFileIds = [];
   renderAttachments(ticket);
+  renderReplies(ticket);
 
   // 不是自己負責的工單只能查看(可能是同一個專案底下同事在跑的)，不能回覆/計時，避免誤觸動到別人的工單
   const isOwn = state.currentUserId == null || ticket.p_user_id === state.currentUserId;
@@ -2374,6 +2663,12 @@ $('btn-batch-submit').addEventListener('click', submitBatch);
 $('batch-reply-status').addEventListener('change', () => {
   $('batch-transfer-to-label').classList.toggle('hidden', $('batch-reply-status').value !== '10');
 });
+document
+  .querySelectorAll('input[name="batch-git-source-mode"]')
+  .forEach((el) => el.addEventListener('change', onBatchGitSourceModeChange));
+$('btn-batch-load-commits').addEventListener('click', loadBatchCommitsList);
+$('btn-batch-generate').addEventListener('click', generateBatchAiReply);
+$('btn-batch-copy-commit').addEventListener('click', () => window.api.clipboard.copy($('batch-reply-commit-message').value));
 
 $('btn-timer-manual-toggle').addEventListener('click', openManualForm);
 $('manual-start').addEventListener('change', autoFillManualDuration);

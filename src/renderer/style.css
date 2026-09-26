@@ -222,6 +222,13 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .ts-reply-body pre, #ticket-search-detail-desc pre { white-space: pre-wrap; overflow-x: auto; }
 .ts-reply-body table, #ticket-search-detail-desc table { display: block; overflow-x: auto; }
 #ticket-search-detail { overflow-x: hidden; }
+
+/* 可收合的回覆記錄(左側工單詳情)：預設收起，點回覆頭才展開，避免一次展開全部回覆拉得太長 */
+.ts-reply-head[data-toggle="reply"] { cursor: pointer; user-select: none; }
+.ts-reply-caret { display: inline-block; width: 1em; color: #999; }
+.ts-reply.collapsed .ts-reply-caret::before { content: '▸'; }
+.ts-reply:not(.collapsed) .ts-reply-caret::before { content: '▾'; }
+.ts-reply.collapsed .ts-reply-content { display: none; }
 #ticket-search-detail-replies, .ts-reply { min-width: 0; }
 .ts-severity-0 { color: #c94f4f; font-weight: 600; }
 .ts-severity-1 { color: #b6720c; font-weight: 600; }
@@ -570,6 +577,12 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .timer-controls button { margin-right: 4px; }
 
 .ai-box { margin: 10px 0; }
+
+/* 批次提交：每張工單各自一行時間，跟單張工單詳情的計時/手動設定共用同一套邏輯與樣式 */
+.batch-time-row { background: #fff; border: 1px solid #e2e5ea; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.batch-time-row .batch-time-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
+.batch-time-row .batch-time-head strong { color: #222; }
+.batch-time-manual-summary { margin: 4px 0; }
 #settings-message, #detail-message, #ai-status, #batch-message { color: #2f6fd8; min-height: 14px; }
 
 .git-source-toggle { display: flex; gap: 16px; font-size: 13px; margin-bottom: 8px; }

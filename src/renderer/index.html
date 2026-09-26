@@ -175,6 +175,11 @@
             <div id="detail-attachments-list"></div>
           </div>
 
+          <div id="detail-replies-box" class="panel-box">
+            <strong>回覆記錄<span id="detail-reply-count" class="meta"></span></strong>
+            <div id="detail-replies-list"></div>
+          </div>
+
           <p id="not-own-notice" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;">
             這張工單不是指派給你的，只能查看，不能回覆或計時
           </p>
@@ -267,8 +272,45 @@
           <h2>批次提交</h2>
           <p id="batch-panel-list"></p>
           <p style="color:#888;">批次提交會套用同一份回覆內容與狀態到每一張工單，但每張工單各自的計時紀錄不受影響、會各自結算。</p>
+
+          <div id="batch-time-box" class="panel-box">
+            <strong>各工單時間(送出前可個別調整，不影響其他張)</strong>
+            <div id="batch-time-list"></div>
+          </div>
+
+          <label>回覆範本類型(僅供AI產生回覆參考語氣與結構，不會回寫EIP)
+            <select id="batch-reply-type">
+              <option value="">未分類</option>
+              <option value="bug">Bug回報</option>
+              <option value="feature">新增需求</option>
+              <option value="optimize">優化調整</option>
+              <option value="inquiry">詢問／諮詢</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+
+          <div class="ai-box">
+            <div class="git-source-toggle">
+              <label><input type="radio" name="batch-git-source-mode" id="batch-git-mode-uncommitted" value="uncommitted" checked /> 尚未提交的變更(目前diff)</label>
+              <label><input type="radio" name="batch-git-source-mode" id="batch-git-mode-commits" value="commits" /> 已提交的commit(可多選)</label>
+            </div>
+            <div id="batch-git-commits-box" class="hidden">
+              <button id="btn-batch-load-commits" type="button">載入近期提交紀錄</button>
+              <div id="batch-git-commits-list"></div>
+            </div>
+            <label>額外說明／參考(選填，會融合進AI產生的共用回覆中)
+              <textarea id="batch-git-extra-note" rows="3" placeholder="例如：這幾張單是同一批需求，各自處理了A、B、C..."></textarea>
+            </label>
+            <button id="btn-batch-generate" type="button">依上面選擇用AI產生共用回覆</button>
+            <p id="batch-ai-status"></p>
+          </div>
+
           <label>共用回覆內容
             <textarea id="batch-reply-info" rows="8"></textarea>
+          </label>
+          <label>Commit訊息(產生後可直接複製去 git commit，批次不提供自動commit，請自行手動執行)
+            <input type="text" id="batch-reply-commit-message" readonly />
+            <button id="btn-batch-copy-commit">複製</button>
           </label>
           <label>標記狀態
             <select id="batch-reply-status">
