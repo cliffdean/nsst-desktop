@@ -34,8 +34,10 @@ async function getInstallListByProject(projectId) {
   return res.data.data;
 }
 
-async function getInstallList(id) {
-  const res = await client().get(`/install-lists/${id}`);
+async function getInstallList(id, ticketsBeforeId) {
+  const res = await client().get(`/install-lists/${id}`, {
+    params: ticketsBeforeId ? { tickets_before_id: ticketsBeforeId } : {},
+  });
   return res.data.data;
 }
 

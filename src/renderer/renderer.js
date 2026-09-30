@@ -3,6 +3,7 @@ const state = {
   currentUserId: null,
   tickets: [],
   currentTicket: null,
+  currentTicketSearchDetail: null, // 右側工單查詢目前顯示的那張工單，給複製工單號／跳去裝機單查詢用
   timers: {}, // { [ticketId]: { status, segments } }，本地算秒數用，不用每秒都問main process
   tickInterval: null,
   selectedIds: new Set(), // 批次提交用的多選狀態
@@ -643,10 +644,18 @@ async function openInstallDetail(id) {
     });
   }
 
-  const tickets = data.recent_tickets || [];
+  renderInstallDetailTickets(data.recent_tickets || [], data.recent_tickets_has_more);
+}
+
+// 相關工單一列一筆，帶上負責人員(=一般認知的「這張工單是誰完成的」)，並依recent_tickets_has_more決定要不要顯示「載入更早的工單」
+function renderInstallDetailTickets(tickets, hasMore) {
   $('install-detail-tickets').innerHTML = tickets.length
     ? tickets
-        .map((t) => `<div class="mini-ticket-row mini-ticket-link" data-id="${t.id}">#${t.id} ${t.summary || ''}</div>`)
+        .map(
+          (t) => `<div class="mini-ticket-row mini-ticket-link" data-id="${t.id}">#${t.id} ${escapeHtml(t.summary || '')}${
+            t.p_user_name ? `　<span class="meta">完成人：${escapeHtml(t.p_user_name)}</span>` : ''
+          }</div>`
+        )
         .join('')
     : '<p style="color:#888;">沒有找到相關工單</p>';
   // 點了會在左側欄開啟該工單詳情，右邊裝機單維持顯示，兩邊可以對照著看
@@ -654,6 +663,28 @@ async function openInstallDetail(id) {
   $('install-detail-tickets').querySelectorAll('.mini-ticket-link').forEach((el) => {
     el.addEventListener('click', () => openTicketDetail(el.dataset.id));
   });
+  $('btn-install-tickets-more').classList.toggle('hidden', !tickets.length || !hasMore);
+}
+
+// 用目前列表最後一筆工單的id當游標，往回抓更舊的一批，接在後面(累加，不是重置)
+async function loadMoreInstallTickets() {
+  const data = state.currentInstallList;
+  const tickets = data && data.recent_tickets;
+  if (!data || !tickets || !tickets.length) return;
+
+  const btn = $('btn-install-tickets-more');
+  btn.disabled = true;
+  btn.textContent = '載入中...';
+  const more = await call(window.api.eip.getInstallList(data.id, tickets[tickets.length - 1].id), (err) =>
+    alert('載入更多工單失敗：' + err)
+  );
+  btn.disabled = false;
+  btn.textContent = '載入更早的工單';
+  if (!more) return;
+
+  data.recent_tickets = tickets.concat(more.recent_tickets || []);
+  data.recent_tickets_has_more = more.recent_tickets_has_more;
+  renderInstallDetailTickets(data.recent_tickets, data.recent_tickets_has_more);
 }
 
 async function pingSite(ip, btnEl) {
@@ -665,9 +696,10 @@ async function pingSite(ip, btnEl) {
     : `❌ ${ip} 連不上 — ${result.detail}`;
 }
 
-async function jumpToSiteFromTicket() {
-  if (!state.currentTicket || !state.currentTicket.project_id) return;
-  const results = await call(window.api.eip.getInstallListByProject(state.currentTicket.project_id), (err) =>
+// 左側工單詳情、右側工單查詢詳情共用：跳去看這個專案的裝機單(案場)資訊
+async function jumpToInstallListByProject(projectId) {
+  if (!projectId) return;
+  const results = await call(window.api.eip.getInstallListByProject(projectId), (err) =>
     alert('查詢失敗：' + err)
   );
   if (!results) return;
@@ -677,6 +709,11 @@ async function jumpToSiteFromTicket() {
   }
   openInstallPanel();
   openInstallDetail(results[0].id);
+}
+
+async function jumpToSiteFromTicket() {
+  if (!state.currentTicket) return;
+  jumpToInstallListByProject(state.currentTicket.project_id);
 }
 
 // ---------------- 工單查詢(全站搜尋所有工單，不限自己) ----------------
@@ -1244,6 +1281,9 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('ticket-search-not-own').classList.toggle('hidden', isOwn);
 
   $('ticket-search-detail-title').textContent = ticket.summary || '(無摘要)';
+  $('ticket-search-detail-id').textContent = formatTicketNo(ticket.id);
+  $('btn-ts-jump-to-site').classList.toggle('hidden', !ticket.project_id);
+  state.currentTicketSearchDetail = ticket; // 給複製工單號／跳去裝機單查詢的按鈕用
 
   const estimate = Number(ticket.estimate) > 0 ? `${ticket.estimate} 小時` : '';
   $('ticket-search-detail-basic').innerHTML = ticketInfoRows([
@@ -2354,6 +2394,8 @@ function commitListHtml(commits) {
   return commits
     .map((c) => {
       const subject = c.message.split('\n')[0];
+      // 日期時間拿掉：這個區塊的寬度本來就窄，hash+日期都是固定寬度不會縮，
+      // 剩給commit訊息的空間被擠到只剩一點點，訊息幾乎全被省略號蓋掉；日期在「查看」彈窗裡看得到，不差這裡
       return `
       <div class="git-commit-item" data-hash="${c.hash}" data-short="${c.shortHash}" data-subject="${escapeHtml(subject)}">
         <div class="git-commit-row">
@@ -2361,7 +2403,6 @@ function commitListHtml(commits) {
           <label class="git-commit-main">
             <input type="checkbox" value="${c.hash}" />
             <span class="git-commit-hash">${c.shortHash}</span>
-            <span class="git-commit-date">${escapeHtml(String(c.date).slice(0, 16))}</span>
             <span class="git-commit-msg" title="${escapeHtml(c.message)}">${escapeHtml(subject)}</span>
           </label>
         </div>
@@ -2645,9 +2686,18 @@ $('btn-login').addEventListener('click', doLogin);
 $('btn-open-install-search').addEventListener('click', openInstallPanel);
 $('btn-install-back').addEventListener('click', closeInstallPanel);
 $('btn-install-detail-close').addEventListener('click', closeInstallDetail);
+$('btn-install-tickets-more').addEventListener('click', loadMoreInstallTickets);
 $('btn-open-ticket-search').addEventListener('click', () => openTicketSearchPanel());
 $('btn-ticket-search-back').addEventListener('click', closeTicketSearchPanel);
 $('btn-ticket-search-detail-close').addEventListener('click', closeTicketSearchDetail);
+$('btn-ts-copy-id').addEventListener('click', () => {
+  if (!state.currentTicketSearchDetail) return;
+  window.api.clipboard.copy(state.currentTicketSearchDetail.id);
+});
+$('btn-ts-jump-to-site').addEventListener('click', () => {
+  if (!state.currentTicketSearchDetail) return;
+  jumpToInstallListByProject(state.currentTicketSearchDetail.project_id);
+});
 $('ticket-search-query').addEventListener('input', () => {
   clearTimeout(ticketSearchTimer);
   const q = $('ticket-search-query').value;

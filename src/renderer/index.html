@@ -411,8 +411,9 @@
             <h4>連線設定</h4>
             <div id="install-detail-connection"></div>
             <p id="install-ping-result" style="color:#888;"></p>
-            <h4>相關工單(最近20筆)</h4>
+            <h4>相關工單</h4>
             <div id="install-detail-tickets"></div>
+            <button id="btn-install-tickets-more" type="button" class="hidden">載入更早的工單</button>
           </div>
         </section>
 
@@ -514,6 +515,7 @@
               <button id="btn-ticket-search-detail-close" type="button">✕ 關閉詳情，回到列表</button>
             </div>
             <h2 id="ticket-search-detail-title"></h2>
+            <p><span class="ticket-id" id="ticket-search-detail-id"></span> <button id="btn-ts-copy-id" type="button">複製工單號</button> <button id="btn-ts-jump-to-site" type="button" class="hidden">查看這個專案的案場／裝機單資訊</button></p>
             <p id="ticket-search-not-own" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;margin:0 0 8px;">
               這張工單不是指派給你的，僅供查詢檢視
             </p>
