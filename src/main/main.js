@@ -197,6 +197,26 @@ function registerHotkey(accelerator) {
   return ok;
 }
 
+// Electron預設沒有右鍵選單：所有視窗(主視窗、獨立工單視窗)統一加上，
+// 圖片(預覽視窗、工單說明/回覆裡的圖)可以複製圖片或網址，選取的文字可以複製
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('context-menu', (_e, params) => {
+    const template = [];
+    if (params.mediaType === 'image') {
+      template.push(
+        { label: '複製圖片', click: () => contents.copyImageAt(params.x, params.y) },
+        { label: '複製圖片網址', click: () => clipboard.writeText(params.srcURL) }
+      );
+    }
+    if (params.selectionText && params.editFlags.canCopy) {
+      if (template.length) template.push({ type: 'separator' });
+      template.push({ label: '複製', role: 'copy' });
+    }
+    if (!template.length) return;
+    Menu.buildFromTemplate(template).popup({ window: BrowserWindow.fromWebContents(contents) || undefined });
+  });
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null); // 這是工具程式不是網頁瀏覽器，不需要File/Edit/View那排選單
   createWindow();
