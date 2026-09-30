@@ -14,7 +14,7 @@
     <button id="btn-close-app-notification" type="button" title="關閉通知">✕</button>
   </div>
   <header id="topbar">
-    <h1>我的工單</h1>
+    <h1 id="topbar-title">我的工單</h1>
     <div class="topbar-actions">
       <button id="btn-open-ticket-search" title="搜尋全部工單">工單查詢</button>
       <button id="btn-open-install-search" title="查詢案場裝機單">裝機單查詢</button>
@@ -133,6 +133,11 @@
     <div id="home-view" class="home-grid">
       <div class="home-main">
         <div id="ticket-list-view">
+          <div class="engineer-picker">
+            <label for="engineer-select">工程師</label>
+            <select id="engineer-select"></select>
+            <span id="engineer-readonly-hint" class="meta hidden">檢視他人工單，僅供查看</span>
+          </div>
           <div id="ticket-tabs" class="ticket-tabs">
             <button class="tab-btn active" data-tab="normal">待處理<span class="tab-count" id="tab-count-normal"></span></button>
             <button class="tab-btn" data-tab="qc">品保中<span class="tab-count" id="tab-count-qc"></span></button>
@@ -197,7 +202,7 @@
               </div>
               <p id="timer-manual-summary" class="meta hidden"></p>
               <div id="timer-manual-form" class="hidden">
-                <p class="meta">工單是完成後才補開時，可直接填工作的起訖時間與實際用時(用時可以比「結束−開始」短，例如中間有休息)。送出回覆時會以這裡的設定為準。</p>
+                <p class="meta">工單是完成後才補開時，可直接填工作的起訖時間與實際用時(用時可以比「結束−開始」短，例如中間有休息)。套用後仍可按「開始」繼續計時，會以這裡的用時為基準往上累加。</p>
                 <div class="manual-grid">
                   <label>開始時間 <input type="datetime-local" id="manual-start" /></label>
                   <label>結束時間 <input type="datetime-local" id="manual-end" /></label>
@@ -585,6 +590,7 @@
     </div>
   </main>
 
+  <script src="ticket-common.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

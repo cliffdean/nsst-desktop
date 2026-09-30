@@ -24,10 +24,10 @@ function closedSecondsOf(segments) {
   return Math.round(total);
 }
 
-// 給畫面顯示用：含目前正在跑的那一段(即時累加)，暫停中的秒數不算進去
+// 給畫面顯示用：含目前正在跑的那一段(即時累加)，暫停中的秒數不算進去；
+// 有手動設定時，手動用時是基準，之後再按開始計時的區段繼續往上加
 function liveSecondsOf(timer) {
-  if (timer.manual) return timer.manual.seconds;
-  let total = closedSecondsOf(timer.segments);
+  let total = (timer.manual ? timer.manual.seconds : 0) + closedSecondsOf(timer.segments);
   if (timer.status === 'running') {
     const openSeg = timer.segments[timer.segments.length - 1];
     if (openSeg && !openSeg.end) {
@@ -39,9 +39,6 @@ function liveSecondsOf(timer) {
 
 function start(ticketId) {
   const timer = getTimer(ticketId);
-  if (timer.manual) {
-    throw new Error('這張工單已手動設定工時，請先清除手動設定才能使用計時');
-  }
   if (timer.status === 'running') {
     return timer;
   }
@@ -64,11 +61,9 @@ function pause(ticketId) {
 }
 
 // 停止：關閉目前區段並回傳統計摘要，供送出工單回覆使用
+// 有手動設定時：用時=手動用時+之後計時的區段，開始時間取手動的開始，結束時間取最後一段計時的結束(沒有再計時就是手動的結束)
 function stop(ticketId) {
   const timer = getTimer(ticketId);
-  if (timer.manual) {
-    return { segments: [], totalSeconds: timer.manual.seconds, firstStart: timer.manual.start, lastEnd: timer.manual.end };
-  }
   if (timer.status === 'running') {
     const openSeg = timer.segments[timer.segments.length - 1];
     if (openSeg && !openSeg.end) {
@@ -78,9 +73,11 @@ function stop(ticketId) {
   timer.status = 'stopped';
   saveTimer(ticketId, timer);
 
-  const totalSeconds = closedSecondsOf(timer.segments);
-  const firstStart = timer.segments.length ? timer.segments[0].start : null;
-  const lastEnd = timer.segments.length ? timer.segments[timer.segments.length - 1].end : null;
+  const manual = timer.manual;
+  const segs = timer.segments;
+  const totalSeconds = (manual ? manual.seconds : 0) + closedSecondsOf(segs);
+  const firstStart = manual ? manual.start : segs.length ? segs[0].start : null;
+  const lastEnd = segs.length ? segs[segs.length - 1].end : manual ? manual.end : null;
 
   return { segments: timer.segments, totalSeconds, firstStart, lastEnd };
 }
@@ -94,13 +91,25 @@ function setManual(ticketId, { start, end, seconds }) {
   const secs = Math.round(Number(seconds));
   if (!Number.isFinite(secs) || secs <= 0) throw new Error('用時必須大於0');
   if (secs > Math.round((endMs - startMs) / 1000)) throw new Error('用時不能超過「結束時間 − 起始時間」');
-  const timer = { status: 'stopped', segments: [], manual: { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(), seconds: secs } };
+  // 手動用時取代之前所有計時記錄；原本正在計時的話不中斷，從現在開一段新的繼續往上累加
+  const wasRunning = getTimer(ticketId).status === 'running';
+  const timer = {
+    status: wasRunning ? 'running' : 'stopped',
+    segments: wasRunning ? [{ start: new Date().toISOString(), end: null }] : [],
+    manual: { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(), seconds: secs },
+  };
   return saveTimer(ticketId, timer);
 }
 
+// 只拿掉手動設定的基準用時，之後按開始累計的區段與目前計時狀態保留
 function clearManual(ticketId) {
-  timersStore.delete(String(ticketId));
-  return getTimer(ticketId);
+  const timer = getTimer(ticketId);
+  delete timer.manual;
+  if (!timer.segments.length && timer.status !== 'running') {
+    timersStore.delete(String(ticketId));
+    return getTimer(ticketId);
+  }
+  return saveTimer(ticketId, timer);
 }
 
 function reset(ticketId) {

@@ -18,6 +18,12 @@ async function whoami() {
   return res.data.data;
 }
 
+// 可指派工單的在職人員(工程部排前面)，給左側「切換工程師」選單用
+async function listEngineers() {
+  const res = await client().get('/engineers');
+  return res.data.data;
+}
+
 // 用EIP帳號密碼直接換一組API token，不用再手動跑 artisan api-token:generate
 async function login(username, password) {
   const res = await client().post('/login', { username, password, label: '桌面工具-自助登入' });
@@ -41,10 +47,12 @@ async function getInstallList(id, ticketsBeforeId) {
   return res.data.data;
 }
 
-async function listTickets(before, q) {
+// userId不帶=自己的工單；帶其他人的id=改看那位工程師的待辦(專案管理分配工作用，僅供查看)
+async function listTickets(before, q, userId) {
   const params = {};
   if (before) params.before = before;
   if (q) params.q = q;
+  if (userId) params.user_id = userId;
   const res = await client().get('/tickets', { params });
   return res.data.data;
 }
@@ -111,6 +119,7 @@ async function uploadFile(filePath) {
 
 module.exports = {
   whoami,
+  listEngineers,
   login,
   listTickets,
   searchTickets,

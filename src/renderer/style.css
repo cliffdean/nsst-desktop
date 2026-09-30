@@ -210,7 +210,7 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .ts-reply-body p { margin: 0 0 6px; }
 /* 回覆/說明常是從EIP網頁貼上的HTML，會帶著行內樣式(width: 955px; float: left; position...)把窄欄撐破，
    行內樣式只能用!important蓋掉：一律不浮動、不定寬、不超出容器 */
-.ts-reply-body *, #ticket-search-detail-desc * {
+.ts-reply-body *, #ticket-search-detail-desc *, #tw-desc * {
   max-width: 100% !important;
   width: auto !important;
   min-width: 0 !important;
@@ -218,9 +218,9 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
   position: static !important;
   box-sizing: border-box;
 }
-.ts-reply-body img, #ticket-search-detail-desc img { height: auto !important; }
-.ts-reply-body pre, #ticket-search-detail-desc pre { white-space: pre-wrap; overflow-x: auto; }
-.ts-reply-body table, #ticket-search-detail-desc table { display: block; overflow-x: auto; }
+.ts-reply-body img, #ticket-search-detail-desc img, #tw-desc img { height: auto !important; }
+.ts-reply-body pre, #ticket-search-detail-desc pre, #tw-desc pre { white-space: pre-wrap; overflow-x: auto; }
+.ts-reply-body table, #ticket-search-detail-desc table, #tw-desc table { display: block; overflow-x: auto; }
 #ticket-search-detail { overflow-x: hidden; }
 
 /* 可收合的回覆記錄(左側工單詳情)：預設收起，點回覆頭才展開，避免一次展開全部回覆拉得太長 */
@@ -637,3 +637,14 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 #commit-modal-files { flex: 0 0 34%; min-width: 0; overflow: auto; border: 1px solid #e3e6eb; border-radius: 4px; padding: 4px; background: #fafbfc; font-size: 12px; }
 #commit-modal-diff { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid #e3e6eb; border-radius: 4px; background: #fff; font-family: Consolas, monospace; font-size: 12px; white-space: pre; }
 .git-file-row.active { background: #dbe7fb; }
+
+/* 獨立的工單詳情視窗(ticket.html)：從右側裝機單的相關工單點開，每張工單一個視窗，可以同時開好幾張對照 */
+#tw-main { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 12px 16px; }
+#tw-main h2 { font-size: 16px; margin: 0 0 6px; }
+#tw-main h4 { margin: 14px 0 6px; }
+
+/* 左側「切換工程師」選單：專案管理分配工作時查看其他人的工單，預設是自己 */
+.engineer-picker { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.engineer-picker label { color: #667; font-size: 12px; white-space: nowrap; }
+.engineer-picker select { flex: 1 1 auto; min-width: 0; }
+.engineer-picker .meta { white-space: nowrap; color: #b6720c; }

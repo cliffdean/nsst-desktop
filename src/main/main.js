@@ -119,6 +119,34 @@ function createWindow() {
   });
 }
 
+// 獨立的工單詳情視窗：同一張工單重複點只把原本的視窗叫到前面，不重複開
+const ticketWindows = new Map();
+
+function openTicketWindow(ticketId) {
+  const key = String(ticketId);
+  const existing = ticketWindows.get(key);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return true;
+  }
+  const win = new BrowserWindow({
+    width: 760,
+    height: 820,
+    minWidth: 480,
+    minHeight: 360,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  ticketWindows.set(key, win);
+  win.on('closed', () => ticketWindows.delete(key));
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'ticket.html'), { query: { id: key } });
+  return true;
+}
+
 function toggleWindow() {
   if (!mainWindow) return;
   if (mainWindow.isVisible()) {
@@ -292,7 +320,8 @@ handle('eip:login', (username, password) => eipApi.login(username, password));
 handle('eip:search-install-lists', (q) => eipApi.searchInstallLists(q));
 handle('eip:get-install-list-by-project', (projectId) => eipApi.getInstallListByProject(projectId));
 handle('eip:get-install-list', (id, ticketsBeforeId) => eipApi.getInstallList(id, ticketsBeforeId));
-handle('eip:list-tickets', (before) => eipApi.listTickets(before));
+handle('eip:list-engineers', () => eipApi.listEngineers());
+handle('eip:list-tickets', (before, userId) => eipApi.listTickets(before, null, userId));
 handle('eip:search-tickets', (q) => eipApi.searchTickets(q));
 handle('eip:advanced-search-tickets', (filters) => eipApi.advancedSearchTickets(filters));
 handle('eip:get-ticket-search-options', () => eipApi.getTicketSearchOptions());
@@ -362,6 +391,8 @@ handle('clipboard:copy', (text) => {
 });
 
 handle('shell:open-external', (url) => shell.openExternal(url));
+
+handle('window:open-ticket', (ticketId) => openTicketWindow(ticketId));
 
 handle('dialog:pick-file', async () => {
   const { dialog } = require('electron');

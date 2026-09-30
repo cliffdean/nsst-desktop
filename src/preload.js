@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   eip: {
     whoami: invoke('eip:whoami'),
+    listEngineers: invoke('eip:list-engineers'),
     login: invoke('eip:login'),
     searchInstallLists: invoke('eip:search-install-lists'),
     getInstallListByProject: invoke('eip:get-install-list-by-project'),
@@ -79,6 +80,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   shell: {
     openExternal: invoke('shell:open-external'),
+  },
+  window: {
+    openTicket: invoke('window:open-ticket'),
   },
   dialog: {
     pickFile: invoke('dialog:pick-file'),

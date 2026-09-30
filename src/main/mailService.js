@@ -55,7 +55,8 @@ async function listRecent(limit) {
   }
 }
 
-// 點開一封信看完整內容(這步會讓信件被標記已讀，跟一般信箱軟體行為一致)
+// 點開一封信看完整內容，並回寫伺服器標記已讀(跟一般信箱軟體行為一致)
+// imapflow抓內文用的是BODY.PEEK，本身不會改已讀狀態，所以要另外加\Seen旗標
 async function getMessage(uid) {
   const client = buildClient();
   await client.connect();
@@ -68,6 +69,10 @@ async function getMessage(uid) {
         throw new Error('找不到這封信，可能已被刪除或移動');
       }
       const parsed = await simpleParser(msg.source);
+      // 標記已讀失敗(例如信箱唯讀)不影響看信，只是角標不會消，記log就好
+      await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }).catch((err) => {
+        console.warn('標記已讀失敗：', err.message);
+      });
       return {
         subject: parsed.subject || '(無主旨)',
         from: parsed.from ? parsed.from.text : '(未知寄件人)',

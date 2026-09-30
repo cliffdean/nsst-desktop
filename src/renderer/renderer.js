@@ -9,6 +9,8 @@ const state = {
   selectedIds: new Set(), // 批次提交用的多選狀態
   searchQuery: '',
   activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單
+  viewUserId: null, // 左側清單目前在看哪位工程師的工單；null=自己(每次開App都從自己開始，不記憶)
+  engineers: [],
   pendingFileIds: [], // 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
   todos: [],
   advSearch: {
@@ -43,71 +45,8 @@ function dateKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function escapeHtml(text) {
-  return String(text || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+initMediaPreview();
 
-// 備註這種自由文字欄位常常有換行，先跳脫HTML特殊字元再把換行轉成<br>，不然會全部擠成一行看不出段落
-function escapeHtmlPreserveNewlines(text) {
-  return escapeHtml(text).replace(/\r\n|\r|\n/g, '<br>');
-}
-
-const $ = (id) => document.getElementById(id);
-
-// 後端 /file/ 對圖片/影片回的Content-Type是application/jpg、application/mp4之類，瀏覽器會當成下載，
-// 所以圖片、影片附件改在客戶端內用<img>/<video>顯示(不看Content-Type)，其他檔案才交給瀏覽器開
-const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
-const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v', 'ogv'];
-
-function fileExt(name) {
-  const m = /.([a-z0-9]+)$/i.exec(String(name || ''));
-  return m ? m[1].toLowerCase() : '';
-}
-
-let imagePreviewUrl = '';
-
-function openMediaPreview(url, name, isVideo) {
-  imagePreviewUrl = url;
-  $('image-preview-title').textContent = name || '';
-  $('image-preview-img').classList.toggle('hidden', isVideo);
-  $('image-preview-video').classList.toggle('hidden', !isVideo);
-  if (isVideo) $('image-preview-video').src = url;
-  else $('image-preview-img').src = url;
-  $('image-preview-backdrop').classList.remove('hidden');
-}
-
-function closeImagePreview() {
-  $('image-preview-backdrop').classList.add('hidden');
-  $('image-preview-img').removeAttribute('src');
-  // 關掉視窗要停掉影片，不然會在背景繼續播放/下載
-  const video = $('image-preview-video');
-  video.pause();
-  video.removeAttribute('src');
-  video.load();
-}
-
-// 附件連結點擊：圖片/影片→預覽視窗，其他→瀏覽器
-function bindAttachmentLinks(container) {
-  container.querySelectorAll('.attachment-link').forEach((el) => {
-    el.addEventListener('click', () => {
-      const url = el.dataset.url;
-      const name = el.dataset.name;
-      const ext = fileExt(name);
-      if (IMAGE_EXTS.includes(ext)) openMediaPreview(url, name, false);
-      else if (VIDEO_EXTS.includes(ext)) openMediaPreview(url, name, true);
-      else window.api.shell.openExternal(url);
-    });
-  });
-}
-
-$('btn-image-preview-close').addEventListener('click', closeImagePreview);
-$('btn-image-preview-open').addEventListener('click', () => window.api.shell.openExternal(imagePreviewUrl));
-$('image-preview-backdrop').addEventListener('click', (e) => {
-  if (e.target === e.currentTarget) closeImagePreview();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeImagePreview();
-});
 
 function showAppNotification(data) {
   $('app-notification-title').textContent = data.title || '通知';
@@ -115,19 +54,10 @@ function showAppNotification(data) {
   $('app-notification').classList.remove('hidden');
 }
 
-function formatSeconds(totalSeconds) {
-  const s = Math.max(0, Math.round(totalSeconds || 0));
-  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
-}
-
 // 跟main process的timerService.liveSecondsOf邏輯一致：已完成區段加總，運行中的那段即時累加，暫停的時間不算
 function liveSecondsOf(timer) {
   if (!timer || !timer.segments) return 0;
-  if (timer.manual) return timer.manual.seconds;
-  let total = 0;
+  let total = timer.manual ? timer.manual.seconds : 0;
   for (const seg of timer.segments) {
     if (seg.end) {
       total += Math.max(0, (new Date(seg.end).getTime() - new Date(seg.start).getTime()) / 1000);
@@ -140,16 +70,6 @@ function liveSecondsOf(timer) {
     }
   }
   return total;
-}
-
-async function call(promise, onError) {
-  const res = await promise;
-  if (!res.ok) {
-    if (onError) onError(res.error);
-    else alert(res.error);
-    return null;
-  }
-  return res.data;
 }
 
 // ---------------- 設定 ----------------
@@ -658,10 +578,9 @@ function renderInstallDetailTickets(tickets, hasMore) {
         )
         .join('')
     : '<p style="color:#888;">沒有找到相關工單</p>';
-  // 點了會在左側欄開啟該工單詳情，右邊裝機單維持顯示，兩邊可以對照著看
-  // 這張工單不一定是指派給自己的(裝機單底下所有工單都會列出來)，如果不是自己的，openTicketDetail會顯示清楚的錯誤訊息
+  // 點了另開一個獨立視窗顯示該工單完整詳情，不佔用左側正在處理的工單，可以同時開好幾張對照
   $('install-detail-tickets').querySelectorAll('.mini-ticket-link').forEach((el) => {
-    el.addEventListener('click', () => openTicketDetail(el.dataset.id));
+    el.addEventListener('click', () => call(window.api.window.openTicket(el.dataset.id)));
   });
   $('btn-install-tickets-more').classList.toggle('hidden', !tickets.length || !hasMore);
 }
@@ -1189,64 +1108,6 @@ function showTicketAloneInSearchList(ticket) {
   bindTicketSearchCards();
 }
 
-// EIP單號顯示成 #000123 (補滿6碼)
-function formatTicketNo(id) {
-  return `#${String(id).padStart(6, '0')}`;
-}
-
-// 進度文字的顏色：超前/準時/進行中偏綠，延誤偏紅，其他(未開始等)維持灰色
-function progressClass(text) {
-  if (/延誤/.test(text)) return 'bad';
-  if (/超前|準時|進行中/.test(text)) return 'good';
-  return '';
-}
-
-// 時間欄位：EIP用 0000-00-00 00:00:00 表示沒填，這種值等同空白
-function validTime(value) {
-  return value && !String(value).startsWith('0000-00-00') ? String(value) : '';
-}
-
-function ticketInfoRows(rows) {
-  return rows
-    .filter(([, value]) => value != null && value !== '')
-    .map(([label, value]) => `<span class="info-label">${label}</span><span class="info-value">${escapeHtmlPreserveNewlines(value)}</span>`)
-    .join('');
-}
-
-// 一則回覆：回覆人／時間／當時標記的狀態、實際工作時段與耗時、回覆內容(EIP富文本HTML)、附檔
-// collapsible=true時(左側工單詳情)：預設收起，只留回覆頭一行，點擊後才展開內容，避免回覆一多畫面被拉得很長
-function ticketReplyHtml(r, collapsible = false) {
-  const workStart = validTime(r.work_start_time);
-  const workEnd = validTime(r.work_end_time);
-  const duration = Number(r.actual_duration_seconds) > 0 ? formatSeconds(r.actual_duration_seconds) : '';
-  const workLine = workStart || workEnd
-    ? `<div class="ts-reply-work">工作時間：${escapeHtml(workStart || '-')} ~ ${escapeHtml(workEnd || '-')}${duration ? `（耗時 ${duration}）` : ''}</div>`
-    : duration ? `<div class="ts-reply-work">耗時：${duration}</div>` : '';
-  const files = (r.files || [])
-    .map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`)
-    .join('');
-  return `<div class="ts-reply${collapsible ? ' collapsed' : ''}">
-    <div class="ts-reply-head"${collapsible ? ' data-toggle="reply"' : ''}>
-      ${collapsible ? '<span class="ts-reply-caret"></span>' : ''}
-      <strong>${escapeHtml(r.user_name || '(未知)')}</strong>
-      <span>${escapeHtml(r.created_at || '')}</span>
-      ${r.status_text ? `<span class="status-badge status-default">${escapeHtml(r.status_text)}</span>` : ''}
-    </div>
-    <div class="ts-reply-content">
-      ${workLine}
-      <div class="ts-reply-body">${r.reply || '(無內容)'}</div>
-      ${files}
-    </div>
-  </div>`;
-}
-
-// 收合式回覆列表點擊展開/收起：一次綁在容器上即可，不用每則回覆分別綁
-function bindReplyToggles(container) {
-  container.querySelectorAll('.ts-reply-head[data-toggle="reply"]').forEach((head) => {
-    head.addEventListener('click', () => head.closest('.ts-reply').classList.toggle('collapsed'));
-  });
-}
-
 // 左側工單詳情的回覆記錄：跟右側工單查詢共用同一份資料與排版，只是預設收合
 function renderReplies(ticket) {
   const replies = ticket.replies || [];
@@ -1285,42 +1146,18 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('btn-ts-jump-to-site').classList.toggle('hidden', !ticket.project_id);
   state.currentTicketSearchDetail = ticket; // 給複製工單號／跳去裝機單查詢的按鈕用
 
-  const estimate = Number(ticket.estimate) > 0 ? `${ticket.estimate} 小時` : '';
-  $('ticket-search-detail-basic').innerHTML = ticketInfoRows([
-    ['單號', formatTicketNo(ticket.id)],
-    ['狀態', ticket.is_qc_stage ? `${ticket.status_text}（已轉品保）` : ticket.status_text],
-    ['進度', ticket.progress_text],
-    ['任務類型', ticket.kind_name],
-    ['專案名稱', ticket.project_name],
-    ['類型', ticket.type_label],
-    ['分類', ticket.classification],
-    ['嚴重程度', ticket.severity_text],
-    ['負責人員', ticket.p_user_name],
-    ['反應人', ticket.c_user_name],
-    ['客戶名稱', ticket.customer_name],
-    ['經銷商', ticket.dealer_name],
-    ['系統功能版本', ticket.version_text],
-    ['負責業務', ticket.sales_name],
-    ['預計工時', estimate],
-    ['創建日期', validTime(ticket.created_at)],
-    ['任務開始日期', validTime(ticket.start_time)],
-    ['任務結束日期', validTime(ticket.end_time)],
-    ['最後更新', validTime(ticket.updated_at)],
-  ]);
+  $('ticket-search-detail-basic').innerHTML = ticketFullInfoRows(ticket);
 
   // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
   $('ticket-search-detail-desc').innerHTML = ticket.description || '(無說明)';
 
-  const attachments = ticket.attachments || [];
-  $('ticket-search-detail-attachments').innerHTML = attachments.length
-    ? attachments.map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`).join('')
-    : '<span style="color:#888;font-size:12px;">目前沒有附件</span>';
+  $('ticket-search-detail-attachments').innerHTML = attachmentsHtml(ticket.attachments);
 
   // API已依時間新到舊排序，跟EIP回覆頁一致，最新的回覆在最上面
   const replies = ticket.replies || [];
   $('ticket-search-reply-count').textContent = replies.length ? `（共 ${replies.length} 則）` : '';
   $('ticket-search-detail-replies').innerHTML = replies.length
-    ? replies.map(ticketReplyHtml).join('')
+    ? replies.map((r) => ticketReplyHtml(r)).join('')
     : '<span style="color:#888;font-size:12px;">目前沒有回覆記錄</span>';
 
   bindAttachmentLinks($('ticket-search-detail'));
@@ -1361,7 +1198,16 @@ async function openMailDetail(uid) {
     $('mail-modal-frame').srcdoc = `<pre style="white-space:pre-wrap;font-family:inherit;">${escapeHtml(msg.text || '(無內容)')}</pre>`;
   }
 
-  refreshMail(); // 讀過的信要更新未讀狀態/角標
+  // 後端已回寫伺服器標記已讀，畫面先立即更新這封信與角標，再重新整理一次跟伺服器對齊
+  const item = $('mail-list').querySelector(`.mail-item[data-uid="${uid}"]`);
+  if (item && item.classList.contains('unread')) {
+    item.classList.remove('unread');
+    const badge = $('mail-unread-badge');
+    const remaining = Math.max(0, (Number(badge.textContent) || 0) - 1);
+    badge.textContent = remaining;
+    badge.classList.toggle('hidden', remaining === 0);
+  }
+  refreshMail();
 }
 
 function closeMailModal() {
@@ -1597,20 +1443,6 @@ async function deleteCurrentEvent() {
 
 // ---------------- 工單清單(含inline計時器，因為多張工單可能同時在跑) ----------------
 
-// 狀態代碼對應語意色系：0新任務/1已指派=待處理(藍)，7追蹤=提醒(橘)，10品保中=審核(紫)，5失敗=警示(紅)，其餘預設灰
-const STATUS_COLOR_CLASS = {
-  0: 'status-info',
-  1: 'status-info',
-  5: 'status-danger',
-  7: 'status-warning',
-  10: 'status-qc',
-};
-
-function statusBadge(ticket) {
-  const cls = STATUS_COLOR_CLASS[ticket.status] || 'status-default';
-  return `<span class="status-badge ${cls}">${escapeHtml(ticket.status_text || '')}</span>`;
-}
-
 function timerControlsHtml(ticket) {
   if (ticket.is_qc_stage) {
     return '<div class="card-timer-note">品保審核中，不需要計時</div>';
@@ -1693,19 +1525,22 @@ function renderTicketList() {
     container.innerHTML = `<p>${emptyText}。</p>`;
     return;
   }
+  // 檢視其他工程師的工單時只能看：不顯示批次勾選、計時、附加檔案(後端也只允許本人回覆/附檔)
+  const readonly = isViewingOtherEngineer();
   container.innerHTML = tickets
     .map(
       (t) => `
       <div class="ticket-card ${ticketDueClass(t)}" data-id="${t.id}">
         <div class="row1">
-          <label class="card-select"><input type="checkbox" class="chk-select" data-id="${t.id}" ${state.selectedIds.has(String(t.id)) ? 'checked' : ''} /></label>
+          ${readonly ? '' : `<label class="card-select"><input type="checkbox" class="chk-select" data-id="${t.id}" ${state.selectedIds.has(String(t.id)) ? 'checked' : ''} /></label>`}
           <span>#${t.id} ${t.project_name || t.name || ''}</span>${statusBadge(t)}
         </div>
         <div class="summary">${t.summary || ''}</div>
         <div class="meta">開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}</div>
-        ${timerControlsHtml(t)}
+        ${readonly ? '' : timerControlsHtml(t)}
         <div class="card-actions-row">
-          <button class="btn-card-attach" data-id="${t.id}" title="不寫回覆，直接上傳檔案掛到這張工單">附加檔案</button>
+          <button class="btn-card-copy-id" data-id="${t.id}" title="複製工單號到剪貼簿">複製單號</button>
+          ${readonly ? '' : `<button class="btn-card-attach" data-id="${t.id}" title="不寫回覆，直接上傳檔案掛到這張工單">附加檔案</button>`}
         </div>
       </div>`
     )
@@ -1717,6 +1552,9 @@ function renderTicketList() {
       if (e.target.closest('button, input, label')) return;
       openTicketDetail(el.dataset.id);
     });
+  });
+  container.querySelectorAll('.btn-card-copy-id').forEach((el) => {
+    el.addEventListener('click', () => copyWithFeedback(el, el.dataset.id));
   });
   container.querySelectorAll('.btn-card-attach').forEach((el) => {
     el.addEventListener('click', () => pickAndAttachForCard(el.dataset.id));
@@ -1978,9 +1816,7 @@ function renderBatchTimeList(selected) {
     .map((t) => {
       const timer = state.timers[t.id];
       const manual = timer && timer.manual;
-      const manualSummary = manual
-        ? `手動設定：${formatLocalDateTime(manual.start)} ~ ${formatLocalDateTime(manual.end)}，用時 ${formatSeconds(manual.seconds)}`
-        : '';
+      const manualSummary = manual ? manualSummaryText(manual) : '';
       return `
       <div class="batch-time-row" data-id="${t.id}">
         <div class="batch-time-head">
@@ -2031,38 +1867,13 @@ function bindBatchTimeListEvents() {
 function openBatchManualForm(ticketId) {
   const row = batchTimeRow(ticketId);
   if (!row) return;
-  const timer = state.timers[ticketId];
-  const manual = timer && timer.manual;
+  const prefill = manualFormPrefill(state.timers[ticketId]);
   const formEl = row.querySelector('.batch-time-manual-form');
-  const startInput = formEl.querySelector('.batch-manual-start');
-  const endInput = formEl.querySelector('.batch-manual-end');
-  const hoursInput = formEl.querySelector('.batch-manual-hours');
-  const minutesInput = formEl.querySelector('.batch-manual-minutes');
-  const msgEl = formEl.querySelector('.batch-manual-message');
-  if (manual) {
-    startInput.value = toInputValue(manual.start);
-    endInput.value = toInputValue(manual.end);
-    hoursInput.value = Math.floor(manual.seconds / 3600);
-    minutesInput.value = Math.round((manual.seconds % 3600) / 60);
-    msgEl.textContent = '';
-  } else if (timer && timer.segments && timer.segments.length) {
-    const first = timer.segments[0];
-    const last = timer.segments[timer.segments.length - 1];
-    startInput.value = toInputValue(first.start);
-    endInput.value = toInputValue(last.end || new Date().toISOString());
-    const totalMinutes = Math.max(1, Math.floor(liveSecondsOf(timer) / 60));
-    hoursInput.value = Math.floor(totalMinutes / 60);
-    minutesInput.value = totalMinutes % 60;
-    msgEl.textContent = timer.status === 'running'
-      ? '已帶入目前計時記錄(計時中，結束時間為現在)；套用後會改成手動設定並停止計時'
-      : '已帶入計時器的記錄(暫停的時間已扣除)，可直接修改後套用';
-  } else {
-    startInput.value = '';
-    endInput.value = '';
-    hoursInput.value = '';
-    minutesInput.value = '';
-    msgEl.textContent = '';
-  }
+  formEl.querySelector('.batch-manual-start').value = prefill ? prefill.start : '';
+  formEl.querySelector('.batch-manual-end').value = prefill ? prefill.end : '';
+  formEl.querySelector('.batch-manual-hours').value = prefill ? prefill.hours : '';
+  formEl.querySelector('.batch-manual-minutes').value = prefill ? prefill.minutes : '';
+  formEl.querySelector('.batch-manual-message').textContent = prefill ? prefill.message : '';
   formEl.classList.remove('hidden');
 }
 
@@ -2129,21 +1940,66 @@ function tick() {
   updateDetailTimerDisplay();
 }
 
+// ---------------- 切換工程師(專案管理分配工作時查看每個人的工單) ----------------
+
+function isViewingOtherEngineer() {
+  return state.viewUserId != null && state.viewUserId !== Number(state.currentUserId);
+}
+
+// 工程部排最前面(後端已排好)，其他部門的人放到下面另一組；舊版後端沒有這支API就整個選單藏起來，不影響看自己的工單
+async function loadEngineers() {
+  const engineers = await call(window.api.eip.listEngineers(), () => {});
+  if (!engineers || !engineers.length) {
+    document.querySelector('.engineer-picker').classList.add('hidden');
+    return;
+  }
+  state.engineers = engineers;
+  const optionHtml = (u) =>
+    `<option value="${u.id}">${escapeHtml(u.name)}${String(u.id) === String(state.currentUserId) ? '（我）' : ''}</option>`;
+  const engineering = engineers.filter((u) => u.is_engineering);
+  const others = engineers.filter((u) => !u.is_engineering);
+  $('engineer-select').innerHTML =
+    (engineering.length ? `<optgroup label="工程部">${engineering.map(optionHtml).join('')}</optgroup>` : '') +
+    (others.length ? `<optgroup label="其他人員">${others.map(optionHtml).join('')}</optgroup>` : '');
+  if (state.currentUserId != null) $('engineer-select').value = String(state.currentUserId);
+}
+
+function switchEngineer() {
+  const id = Number($('engineer-select').value);
+  state.viewUserId = id && id !== Number(state.currentUserId) ? id : null;
+  const viewing = isViewingOtherEngineer();
+  const who = viewing ? (state.engineers.find((u) => Number(u.id) === id) || {}).name : '';
+  $('topbar-title').textContent = viewing ? `${who} 的工單` : '我的工單';
+  $('engineer-readonly-hint').classList.toggle('hidden', !viewing);
+  state.selectedIds.clear();
+  updateBatchBar();
+  state.tickets = [];
+  $('ticket-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
+  updateTabCounts();
+  refreshTicketList();
+}
+
 async function refreshTicketList() {
+  const viewUserId = state.viewUserId;
   const [tickets, timers] = await Promise.all([
-    call(window.api.eip.listTickets(), (err) => {
-      $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
+    call(window.api.eip.listTickets(null, viewUserId), (err) => {
+      if (state.viewUserId === viewUserId) $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
     }),
     call(window.api.timer.getAll()),
   ]);
   if (timers) state.timers = timers;
-  if (!tickets) return { label: '工單', count: 0 };
-  const ids = new Set(tickets.map((ticket) => String(ticket.id)));
-  const count = state.refreshSnapshot.initialized
-    ? [...ids].filter((id) => !state.refreshSnapshot.ticketIds.has(id)).length
-    : 0;
-  state.refreshSnapshot.ticketIds = ids;
+  // 請求途中切換了工程師，這批結果已經不是畫面上要看的人，丟掉，等新的那次請求回來
+  if (!tickets || state.viewUserId !== viewUserId) return { label: '工單', count: 0 };
   state.tickets = tickets;
+  // 「新工單」通知只看自己的工單；檢視別人時不動自己的快照，切回自己後下一次重整仍能正確比對出新增
+  let count = 0;
+  if (!isViewingOtherEngineer()) {
+    const ids = new Set(tickets.map((ticket) => String(ticket.id)));
+    count = state.refreshSnapshot.initialized
+      ? [...ids].filter((id) => !state.refreshSnapshot.ticketIds.has(id)).length
+      : 0;
+    state.refreshSnapshot.ticketIds = ids;
+  }
   renderTicketList();
   return { label: '工單', count };
 }
@@ -2168,14 +2024,7 @@ function buildStatusOptionsHtml(isQcStage, currentStatus) {
 }
 
 function renderAttachments(ticket) {
-  const attachments = ticket.attachments || [];
-  if (!attachments.length) {
-    $('detail-attachments-list').innerHTML = '<span style="color:#888;font-size:12px;">目前沒有附件</span>';
-    return;
-  }
-  $('detail-attachments-list').innerHTML = attachments
-    .map((f) => `<span class="attachment-link" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_filename)}">📎 ${escapeHtml(f.original_filename)}</span>`)
-    .join('');
+  $('detail-attachments-list').innerHTML = attachmentsHtml(ticket.attachments);
   bindAttachmentLinks($('detail-attachments-list'));
 }
 
@@ -2196,14 +2045,35 @@ function updateDetailTimerDisplay() {
   const timer = state.timers[state.currentTicket.id];
   $('timer-display').textContent = formatSeconds(liveSecondsOf(timer));
 
-  // 已手動設定時：計時按鈕沒意義，改顯示設定摘要
+  // 已手動設定時：計時按鈕照常可用(以手動用時為基準往上累加)，另外顯示設定摘要
   const manual = timer && timer.manual;
-  ['btn-timer-start', 'btn-timer-pause', 'btn-timer-stop'].forEach((id) => $(id).classList.toggle('hidden', !!manual));
+  const running = timer && timer.status === 'running';
+  $('btn-timer-start').disabled = !!running;
+  $('btn-timer-pause').disabled = !running;
   $('timer-manual-summary').classList.toggle('hidden', !manual);
   $('btn-manual-clear').classList.toggle('hidden', !manual);
-  if (manual) {
-    $('timer-manual-summary').textContent = '手動設定：' + formatLocalDateTime(manual.start) + ' ~ ' + formatLocalDateTime(manual.end) + '，用時 ' + formatSeconds(manual.seconds);
-  }
+  if (manual) $('timer-manual-summary').textContent = manualSummaryText(manual);
+}
+
+function manualSummaryText(manual) {
+  return `手動設定：${formatLocalDateTime(manual.start)} ~ ${formatLocalDateTime(manual.end)}，用時 ${formatSeconds(manual.seconds)}（之後計時會在此基礎上繼續累加）`;
+}
+
+// 打開手動設定表單時的預設值：已有手動設定或計時記錄就帶入「目前累計」(手動基準+之後計時)，讓套用後的時間銜接得上
+function manualFormPrefill(timer) {
+  const manual = timer && timer.manual;
+  const segs = (timer && timer.segments) || [];
+  if (!manual && !segs.length) return null;
+  const running = timer.status === 'running';
+  const last = segs[segs.length - 1];
+  const start = manual ? manual.start : segs[0].start;
+  const end = last ? last.end || new Date().toISOString() : manual.end;
+  // 分鐘無條件捨去，避免用時超過(結束−開始)被擋下；不足一分鐘至少帶1分
+  const totalMinutes = Math.max(1, Math.floor(liveSecondsOf(timer) / 60));
+  let message = '';
+  if (running) message = '已帶入目前累計(計時中，結束時間為現在)；套用後會以新的用時為基準繼續計時';
+  else if (segs.length) message = '已帶入目前累計(暫停的時間已扣除)，可直接修改後套用';
+  return { start: toInputValue(start), end: toInputValue(end), hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60, message };
 }
 
 function formatLocalDateTime(iso) {
@@ -2218,30 +2088,14 @@ function toInputValue(iso) {
 }
 
 function openManualForm() {
-  const timer = state.timers[state.currentTicket.id];
-  const manual = timer && timer.manual;
-  if (manual) {
-    $('manual-start').value = toInputValue(manual.start);
-    $('manual-end').value = toInputValue(manual.end);
-    $('manual-hours').value = Math.floor(manual.seconds / 3600);
-    $('manual-minutes').value = Math.round((manual.seconds % 3600) / 60);
-    $('timer-manual-message').textContent = '';
-  } else if (timer && timer.segments && timer.segments.length) {
-    // 計時器已經記錄過：帶入第一段開始、最後一段結束(還在跑就用現在)與已記錄的用時，方便直接微調
-    const first = timer.segments[0];
-    const last = timer.segments[timer.segments.length - 1];
-    $('manual-start').value = toInputValue(first.start);
-    $('manual-end').value = toInputValue(last.end || new Date().toISOString());
-    // 分鐘無條件捨去，避免用時超過(結束−開始)被後端擋下；不足一分鐘至少帶1分
-    const totalMinutes = Math.max(1, Math.floor(liveSecondsOf(timer) / 60));
-    $('manual-hours').value = Math.floor(totalMinutes / 60);
-    $('manual-minutes').value = totalMinutes % 60;
-    $('timer-manual-message').textContent = timer.status === 'running'
-      ? '已帶入目前計時記錄(計時中，結束時間為現在)；套用後會改成手動設定並停止計時'
-      : '已帶入計時器的記錄(暫停的時間已扣除)，可直接修改後套用';
-  } else {
-    $('timer-manual-message').textContent = '';
+  const prefill = manualFormPrefill(state.timers[state.currentTicket.id]);
+  if (prefill) {
+    $('manual-start').value = prefill.start;
+    $('manual-end').value = prefill.end;
+    $('manual-hours').value = prefill.hours;
+    $('manual-minutes').value = prefill.minutes;
   }
+  $('timer-manual-message').textContent = prefill ? prefill.message : '';
   $('timer-manual-form').classList.remove('hidden');
 }
 
@@ -2692,7 +2546,7 @@ $('btn-ticket-search-back').addEventListener('click', closeTicketSearchPanel);
 $('btn-ticket-search-detail-close').addEventListener('click', closeTicketSearchDetail);
 $('btn-ts-copy-id').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
-  window.api.clipboard.copy(state.currentTicketSearchDetail.id);
+  copyWithFeedback($('btn-ts-copy-id'), state.currentTicketSearchDetail.id);
 });
 $('btn-ts-jump-to-site').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
@@ -2780,7 +2634,7 @@ $('btn-cancel-event').addEventListener('click', cancelEventForm);
 $('btn-delete-event').addEventListener('click', deleteCurrentEvent);
 $('btn-submit-new-event').addEventListener('click', submitNewEvent);
 $('btn-back').addEventListener('click', backToList);
-$('btn-copy-id').addEventListener('click', () => window.api.clipboard.copy(state.currentTicket.id));
+$('btn-copy-id').addEventListener('click', (e) => copyWithFeedback(e.currentTarget, state.currentTicket.id));
 $('btn-view-ticket-full').addEventListener('click', viewCurrentTicketFull);
 $('btn-copy-commit').addEventListener('click', () => window.api.clipboard.copy($('reply-commit-message').value));
 $('btn-save-project-path').addEventListener('click', saveProjectPath);
@@ -2802,6 +2656,7 @@ $('ticket-search').addEventListener('input', () => {
   state.searchQuery = $('ticket-search').value;
   renderTicketList();
 });
+$('engineer-select').addEventListener('change', switchEngineer);
 document.querySelectorAll('.tab-btn').forEach((el) => {
   el.addEventListener('click', () => switchTab(el.dataset.tab));
 });
@@ -2878,5 +2733,5 @@ function tickAutoRefresh() {
   await loadSettingsIntoForm();
   const whoamiResult = await call(window.api.eip.whoami());
   if (whoamiResult) state.currentUserId = whoamiResult.id;
-  await Promise.all([refreshAll(), loadTodos()]);
+  await Promise.all([refreshAll(), loadTodos(), loadEngineers()]);
 })();

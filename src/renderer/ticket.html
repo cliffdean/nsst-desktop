@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>工單詳情</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <h1 id="tw-header">工單詳情</h1>
+    <div class="topbar-actions">
+      <button id="btn-tw-copy-id" type="button">複製工單號</button>
+      <button id="btn-tw-reload" type="button" title="重新讀取這張工單">重新整理</button>
+    </div>
+  </header>
+
+  <main id="tw-main">
+    <h2 id="tw-title">讀取中...</h2>
+    <p id="tw-not-own" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;margin:0 0 8px;">
+      這張工單不是指派給你的，僅供查詢檢視
+    </p>
+    <div id="tw-basic" class="info-grid wide-label"></div>
+    <h4>說明</h4>
+    <div id="tw-desc" class="detail-desc"></div>
+    <h4>附件</h4>
+    <div id="tw-attachments"></div>
+    <h4>回覆記錄<span id="tw-reply-count" class="meta"></span></h4>
+    <div id="tw-replies"></div>
+  </main>
+
+  <div id="image-preview-backdrop" class="modal-backdrop hidden">
+    <div class="modal-box image-preview-box">
+      <div class="modal-header">
+        <h2 id="image-preview-title"></h2>
+        <button id="btn-image-preview-open" title="用瀏覽器開啟">↗</button>
+        <button id="btn-image-preview-close">✕</button>
+      </div>
+      <div class="image-preview-wrap">
+        <img id="image-preview-img" alt="">
+        <video id="image-preview-video" controls class="hidden"></video>
+      </div>
+    </div>
+  </div>
+
+  <script src="ticket-common.js"></script>
+  <script src="ticket-window.js"></script>
+</body>
+</html>
