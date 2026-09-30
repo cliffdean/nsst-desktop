@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   eip: {
     whoami: invoke('eip:whoami'),
     listEngineers: invoke('eip:list-engineers'),
+    listProjects: invoke('eip:list-projects'),
     login: invoke('eip:login'),
     searchInstallLists: invoke('eip:search-install-lists'),
     getInstallListByProject: invoke('eip:get-install-list-by-project'),

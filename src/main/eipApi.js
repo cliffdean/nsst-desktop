@@ -24,6 +24,15 @@ async function listEngineers() {
   return res.data.data;
 }
 
+// 專案清單(含流程進度各階段的狀態)；status是逗號分隔的專案狀態代碼，不帶=全部
+async function listProjects(q, status) {
+  const params = {};
+  if (q) params.q = q;
+  if (status) params.status = status;
+  const res = await client().get('/projects', { params });
+  return res.data.data;
+}
+
 // 用EIP帳號密碼直接換一組API token，不用再手動跑 artisan api-token:generate
 async function login(username, password) {
   const res = await client().post('/login', { username, password, label: '桌面工具-自助登入' });
@@ -120,6 +129,7 @@ async function uploadFile(filePath) {
 module.exports = {
   whoami,
   listEngineers,
+  listProjects,
   login,
   listTickets,
   searchTickets,

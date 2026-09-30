@@ -341,6 +341,7 @@ handle('eip:search-install-lists', (q) => eipApi.searchInstallLists(q));
 handle('eip:get-install-list-by-project', (projectId) => eipApi.getInstallListByProject(projectId));
 handle('eip:get-install-list', (id, ticketsBeforeId) => eipApi.getInstallList(id, ticketsBeforeId));
 handle('eip:list-engineers', () => eipApi.listEngineers());
+handle('eip:list-projects', (q, status) => eipApi.listProjects(q, status));
 handle('eip:list-tickets', (before, userId) => eipApi.listTickets(before, null, userId));
 handle('eip:search-tickets', (q) => eipApi.searchTickets(q));
 handle('eip:advanced-search-tickets', (filters) => eipApi.advancedSearchTickets(filters));

@@ -452,8 +452,9 @@ let installSearchTimer = null;
 function openInstallPanel() {
   // 工單詳情跟裝機單現在分別在左右兩欄，互不影響，可以同時對照著看
   $('sidebar-default-view').classList.add('hidden');
-  // 工單查詢跟裝機單查詢共用右側欄位置，兩個畫面互斥，開其中一個要先關掉另一個，不然會疊在一起打架
+  // 工單查詢/裝機單查詢/專案查詢共用右側欄位置，畫面互斥，開其中一個要先關掉其他的，不然會疊在一起打架
   $('ticket-search-panel').classList.add('hidden');
+  $('project-panel').classList.add('hidden');
   $('install-panel').classList.remove('hidden');
   $('install-panel').classList.remove('has-detail');
   $('install-search').value = '';
@@ -635,6 +636,156 @@ async function jumpToSiteFromTicket() {
   jumpToInstallListByProject(state.currentTicket.project_id);
 }
 
+// ---------------- 專案查詢(對應EIP「建立專案」頁的專案清單與流程進度) ----------------
+
+let projectSearchTimer = null;
+let projectSearchSeq = 0; // 連續打字會發出好幾次搜尋，只採用最後一次的結果，避免晚回來的舊結果蓋掉新的
+let projectTicketsSeq = 0;
+const projectPanel = { status: '1', projects: [], selected: null }; // selected = { projectId, stage }，stage為null代表全部階段
+
+// 專案狀態配色沿用EIP網頁：未進行灰、進行中橘、已完成綠、取消/終止紅
+const PROJECT_STATUS_CLASS = { default: 'status-default', warning: 'status-warning', success: 'status-success', danger: 'status-danger' };
+
+function openProjectPanel() {
+  $('sidebar-default-view').classList.add('hidden');
+  $('install-panel').classList.add('hidden');
+  $('ticket-search-panel').classList.add('hidden');
+  $('project-panel').classList.remove('hidden');
+  closeProjectTickets();
+  $('project-search').focus();
+  runProjectSearch();
+}
+
+function closeProjectPanel() {
+  $('project-panel').classList.add('hidden');
+  $('sidebar-default-view').classList.remove('hidden');
+}
+
+function closeProjectTickets() {
+  projectPanel.selected = null;
+  projectTicketsSeq++; // 關掉後還在路上的工單查詢結果直接作廢
+  $('project-panel').classList.remove('has-detail');
+  $('project-tickets').classList.add('hidden');
+  renderProjectSelection();
+}
+
+async function runProjectSearch() {
+  const seq = ++projectSearchSeq;
+  const q = $('project-search').value.trim();
+  $('project-results').innerHTML = '<p style="color:#888;">讀取中...</p>';
+  const projects = await call(window.api.eip.listProjects(q, projectPanel.status), (err) => {
+    if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err)}</p>`;
+  });
+  if (!projects || seq !== projectSearchSeq) return;
+  projectPanel.projects = projects;
+  if (!projects.length) {
+    $('project-results').innerHTML = '<p style="color:#888;">沒有符合的專案</p>';
+    return;
+  }
+  $('project-results').innerHTML =
+    projects.map(projectCardHtml).join('') +
+    (projects.length >= 300 ? '<p class="meta">只顯示最新300筆，請用關鍵字或狀態縮小範圍</p>' : '');
+  renderProjectSelection();
+}
+
+function projectCardHtml(p) {
+  const metaItem = (label, value) => (value ? `<span><span class="ts-k">${label}</span> ${escapeHtml(value)}</span>` : '');
+  const stages = (p.stages || [])
+    .map((s, i) => {
+      const tip = s.state === 0 ? `${s.name}：尚未開單` : `${s.name}：共${s.total}張工單，已關閉${s.closed}張`;
+      return `${i ? '<span class="stage-arrow">›</span>' : ''}<button type="button" class="stage-chip stage-s${s.state}" data-pid="${p.id}" data-stage="${s.index}" title="${escapeHtml(tip)}" ${s.state === 0 ? 'disabled' : ''}>${escapeHtml(s.name)}</button>`;
+    })
+    .join('');
+  return `<div class="install-card project-card" data-id="${p.id}">
+    <div class="install-name">#${p.id} ${escapeHtml(p.name || '(無名稱)')}<span class="status-badge ${PROJECT_STATUS_CLASS[p.status_color] || 'status-default'}">${escapeHtml(p.status_text || '')}</span></div>
+    ${p.parent_name ? `<div class="project-parent">追加專案（主專案：${escapeHtml(p.parent_name)}）</div>` : ''}
+    <div class="ts-card-meta">
+      ${metaItem('代碼', p.code)}
+      ${metaItem('客戶', p.customer_name)}
+      ${metaItem('經銷商', p.dealer_name)}
+      ${metaItem('業務', p.sales_name)}
+      ${metaItem('類型', p.prj_type)}
+    </div>
+    <div class="stage-flow">${stages}</div>
+    <div class="project-card-actions">
+      <button type="button" class="btn-project-all-tickets" data-pid="${p.id}">全部工單</button>
+      ${p.install_list_id ? `<button type="button" class="btn-project-site" data-site="${p.install_list_id}">案場資訊</button>` : ''}
+    </div>
+  </div>`;
+}
+
+// 目前選中的專案卡片框起來、選中的階段加外框，讓下方工單列表對得上是哪個專案的哪個階段
+function renderProjectSelection() {
+  const sel = projectPanel.selected;
+  $('project-results').querySelectorAll('.project-card').forEach((card) => {
+    card.classList.toggle('selected', !!sel && card.dataset.id === String(sel.projectId));
+  });
+  $('project-results').querySelectorAll('.stage-chip').forEach((chip) => {
+    chip.classList.toggle('active', !!sel && sel.stage != null && chip.dataset.pid === String(sel.projectId) && chip.dataset.stage === String(sel.stage));
+  });
+}
+
+// 點流程階段(或「全部工單」)：下方列出該專案該階段的工單；排除已刪除的單，跟流程顏色的計算基準一致
+async function openProjectTickets(projectId, stage) {
+  const project = projectPanel.projects.find((p) => String(p.id) === String(projectId));
+  if (!project) return;
+  const stageInfo = stage != null ? project.stages.find((s) => s.index === stage) : null;
+  projectPanel.selected = { projectId: project.id, stage };
+  renderProjectSelection();
+
+  $('project-panel').classList.add('has-detail');
+  $('project-tickets').classList.remove('hidden');
+  $('project-tickets-title').textContent = `▾ ${project.name}　${stageInfo ? stageInfo.name : '全部階段'}`;
+  $('project-tickets-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
+
+  const seq = ++projectTicketsSeq;
+  const filters = { project_id: project.id, status: '0,1,2,3,4,5,6,7,8,10', order_by: 'id', order_dir: 'desc', per_page: 100 };
+  if (stage != null) filters.task_stage = stage;
+  const res = await call(window.api.eip.advancedSearchTickets(filters), (err) => {
+    if (seq === projectTicketsSeq) $('project-tickets-list').innerHTML = `<p style="color:#d84f4f;">讀取工單失敗：${escapeHtml(err)}</p>`;
+  });
+  if (!res || seq !== projectTicketsSeq) return;
+
+  const { items, meta } = res;
+  if (!items.length) {
+    $('project-tickets-list').innerHTML = '<p style="color:#888;">沒有工單</p>';
+    return;
+  }
+  const total = meta ? meta.total : items.length;
+  $('project-tickets-list').innerHTML =
+    `<p class="meta">共 ${total} 張${total > items.length ? `，只顯示最新 ${items.length} 張` : ''}，點工單另開視窗查看詳情</p>` +
+    items.map(ticketSearchCardHtml).join('');
+  // 跟裝機單的相關工單一樣另開視窗，不打斷右側正在看的專案列表
+  $('project-tickets-list').querySelectorAll('.ticket-search-card').forEach((el) => {
+    el.addEventListener('click', () => call(window.api.window.openTicket(el.dataset.id)));
+  });
+}
+
+function onProjectResultsClick(e) {
+  const chip = e.target.closest('.stage-chip');
+  if (chip && !chip.disabled) {
+    openProjectTickets(chip.dataset.pid, Number(chip.dataset.stage));
+    return;
+  }
+  const allBtn = e.target.closest('.btn-project-all-tickets');
+  if (allBtn) {
+    openProjectTickets(allBtn.dataset.pid, null);
+    return;
+  }
+  const siteBtn = e.target.closest('.btn-project-site');
+  if (siteBtn) {
+    openInstallPanel();
+    openInstallDetail(siteBtn.dataset.site);
+  }
+}
+
+function switchProjectStatus(status) {
+  projectPanel.status = status;
+  document.querySelectorAll('.project-status-btn').forEach((el) => el.classList.toggle('active', el.dataset.status === status));
+  closeProjectTickets();
+  runProjectSearch();
+}
+
 // ---------------- 工單查詢(全站搜尋所有工單，不限自己) ----------------
 
 let ticketSearchTimer = null;
@@ -645,6 +796,7 @@ let ticketSearchTimer = null;
 function openTicketSearchPanel(focusSearch = true, skipInitialSearch = false) {
   $('sidebar-default-view').classList.add('hidden');
   $('install-panel').classList.add('hidden');
+  $('project-panel').classList.add('hidden');
   $('ticket-search-panel').classList.remove('hidden');
   $('ticket-search-panel').classList.remove('has-detail');
   $('ticket-search-detail').classList.add('hidden');
@@ -2541,6 +2693,17 @@ $('btn-open-install-search').addEventListener('click', openInstallPanel);
 $('btn-install-back').addEventListener('click', closeInstallPanel);
 $('btn-install-detail-close').addEventListener('click', closeInstallDetail);
 $('btn-install-tickets-more').addEventListener('click', loadMoreInstallTickets);
+$('btn-open-project-search').addEventListener('click', openProjectPanel);
+$('btn-project-back').addEventListener('click', closeProjectPanel);
+$('btn-project-tickets-close').addEventListener('click', closeProjectTickets);
+$('project-results').addEventListener('click', onProjectResultsClick);
+$('project-search').addEventListener('input', () => {
+  clearTimeout(projectSearchTimer);
+  projectSearchTimer = setTimeout(runProjectSearch, 300);
+});
+document.querySelectorAll('.project-status-btn').forEach((el) => {
+  el.addEventListener('click', () => switchProjectStatus(el.dataset.status));
+});
 $('btn-open-ticket-search').addEventListener('click', () => openTicketSearchPanel());
 $('btn-ticket-search-back').addEventListener('click', closeTicketSearchPanel);
 $('btn-ticket-search-detail-close').addEventListener('click', closeTicketSearchDetail);

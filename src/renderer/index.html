@@ -18,6 +18,7 @@
     <div class="topbar-actions">
       <button id="btn-open-ticket-search" title="搜尋全部工單">工單查詢</button>
       <button id="btn-open-install-search" title="查詢案場裝機單">裝機單查詢</button>
+      <button id="btn-open-project-search" title="查詢專案與流程進度">專案查詢</button>
       <span id="refresh-countdown" class="refresh-countdown"></span>
       <button id="btn-refresh" title="重新整理工單／信箱／行事曆">重新整理</button>
       <button id="btn-settings" title="設定">設定</button>
@@ -419,6 +420,36 @@
             <h4>相關工單</h4>
             <div id="install-detail-tickets"></div>
             <button id="btn-install-tickets-more" type="button" class="hidden">載入更早的工單</button>
+          </div>
+        </section>
+
+        <section id="project-panel" class="panel-box content-view hidden">
+          <div class="mail-panel-header">
+            <h2>專案查詢</h2>
+            <button id="btn-project-back">返回信箱／行事曆</button>
+          </div>
+          <input type="text" id="project-search" class="search-box" placeholder="搜尋專案編號／名稱／代碼／客戶／經銷商..." />
+          <div id="project-status-tabs" class="project-status-tabs">
+            <button class="project-status-btn" data-status="">全部</button>
+            <button class="project-status-btn" data-status="0">未進行</button>
+            <button class="project-status-btn active" data-status="1">進行中</button>
+            <button class="project-status-btn" data-status="2">已完成</button>
+            <button class="project-status-btn" data-status="3">取消(退貨)</button>
+          </div>
+          <div class="stage-legend">
+            <span><i class="stage-dot stage-s0"></i>未開單</span>
+            <span><i class="stage-dot stage-s1"></i>進行中(有未關閉工單)</span>
+            <span><i class="stage-dot stage-s2"></i>工單已全部關閉</span>
+            <span class="meta">點流程階段查看該階段的工單</span>
+          </div>
+          <div id="project-results"></div>
+
+          <div id="project-tickets" class="hidden">
+            <div class="ts-detail-divider">
+              <span id="project-tickets-title">▾ 工單</span>
+              <button id="btn-project-tickets-close" type="button">✕ 關閉，回到專案列表</button>
+            </div>
+            <div id="project-tickets-list"></div>
           </div>
         </section>
 

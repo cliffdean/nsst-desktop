@@ -648,3 +648,56 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .engineer-picker label { color: #667; font-size: 12px; white-space: nowrap; }
 .engineer-picker select { flex: 1 1 auto; min-width: 0; }
 .engineer-picker .meta { white-space: nowrap; color: #b6720c; }
+
+/* 專案查詢：顯示在右側欄，跟信箱/行事曆/工單查詢/裝機單互斥切換；點流程階段後下方列出該階段工單(同工單查詢的上下分割) */
+#project-panel { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+#project-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#project-tickets { overflow-y: auto; }
+#project-panel.has-detail #project-results { flex: 0 0 auto; max-height: 240px; }
+#project-panel.has-detail #project-tickets { flex: 1 1 auto; min-height: 0; }
+
+.project-status-tabs { display: flex; gap: 4px; margin: 6px 0; }
+.project-status-btn {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #cfd4dc;
+  background: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.project-status-btn.active { background: #2f6fd8; color: #fff; border-color: #2f6fd8; }
+.status-badge.status-success { background: #e4f4ea; color: #2f8a4f; }
+
+.stage-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 11px; color: #667; margin-bottom: 8px; }
+.stage-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.stage-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid; }
+
+.project-card { cursor: default; }
+.project-card:hover { border-color: #e2e5ea; }
+.project-card.selected { border-color: #2f6fd8; box-shadow: 0 0 0 1px #2f6fd8 inset; }
+.project-card .install-name { display: flex; align-items: center; gap: 6px; }
+.project-card .install-name .status-badge { margin-left: auto; }
+.project-parent { font-size: 11px; color: #8a3fd8; margin-top: 2px; }
+.project-card-actions { display: flex; gap: 6px; margin-top: 6px; }
+.project-card-actions button { padding: 2px 8px; font-size: 12px; }
+
+/* 流程進度：側欄窄，16個階段改成自動換行的小方塊，階段間用箭頭串起來；顏色對應EIP網頁的流程進度欄 */
+.stage-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; margin-top: 6px; }
+.stage-chip {
+  padding: 2px 6px;
+  border: 1px solid;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stage-chip:disabled { cursor: default; }
+.stage-chip.active { outline: 2px solid #1f2430; outline-offset: 1px; }
+.stage-arrow { color: #c3c8d0; font-size: 11px; }
+.stage-s0 { background: #f4f5f7; color: #aab0ba; border-color: #e2e5ea; }
+.stage-s1 { background: #fdf1e0; color: #b6720c; border-color: #efc27a; }
+.stage-s2 { background: #e3edfc; color: #2f6fd8; border-color: #a9c4ef; }
+.stage-chip.stage-s1:hover { background: #fbe3c0; }
+.stage-chip.stage-s2:hover { background: #cfe0fa; }
