@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('api', {
     getType: invoke('ticket-meta:get-type'),
     setType: invoke('ticket-meta:set-type'),
   },
+  projectStar: {
+    list: invoke('project-star:list'),
+    toggle: invoke('project-star:toggle'),
+  },
   todo: {
     list: invoke('todo:list'),
     save: invoke('todo:save'),
@@ -30,6 +34,9 @@ contextBridge.exposeInMainWorld('api', {
     whoami: invoke('eip:whoami'),
     listEngineers: invoke('eip:list-engineers'),
     listProjects: invoke('eip:list-projects'),
+    projectDeptTransfer: invoke('eip:project-dept-transfer'),
+    projectPaymentUpdate: invoke('eip:project-payment-update'),
+    projectPaymentPercentSave: invoke('eip:project-payment-percent-save'),
     login: invoke('eip:login'),
     searchInstallLists: invoke('eip:search-install-lists'),
     getInstallListByProject: invoke('eip:get-install-list-by-project'),

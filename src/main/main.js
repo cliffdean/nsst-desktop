@@ -1,7 +1,7 @@
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, clipboard, shell, screen } = require('electron');
 const path = require('path');
 
-const { settingsStore, ticketMetaStore, todoStore } = require('./store');
+const { settingsStore, ticketMetaStore, todoStore, projectStarStore } = require('./store');
 const eipApi = require('./eipApi');
 const timerService = require('./timerService');
 const gitService = require('./gitService');
@@ -276,6 +276,19 @@ handle('ticket-meta:set-type', (ticketId, type) => {
   return type;
 });
 
+// 加星關注的專案：純本地功能，回傳目前所有已加星的project id(字串陣列)
+handle('project-star:list', () => Object.keys(projectStarStore.store));
+handle('project-star:toggle', (projectId) => {
+  const key = String(projectId);
+  const starred = !projectStarStore.get(key, false);
+  if (starred) {
+    projectStarStore.set(key, true);
+  } else {
+    projectStarStore.delete(key);
+  }
+  return starred;
+});
+
 handle('todo:list', () => getTodos());
 handle('todo:save', (todo) => {
   const todos = getTodos();
@@ -342,6 +355,9 @@ handle('eip:get-install-list-by-project', (projectId) => eipApi.getInstallListBy
 handle('eip:get-install-list', (id, ticketsBeforeId) => eipApi.getInstallList(id, ticketsBeforeId));
 handle('eip:list-engineers', () => eipApi.listEngineers());
 handle('eip:list-projects', (q, status) => eipApi.listProjects(q, status));
+handle('eip:project-dept-transfer', (projectId, dept) => eipApi.projectDeptTransfer(projectId, dept));
+handle('eip:project-payment-update', (projectId, period, status) => eipApi.projectPaymentUpdate(projectId, period, status));
+handle('eip:project-payment-percent-save', (projectId, percents) => eipApi.projectPaymentPercentSave(projectId, percents));
 handle('eip:list-tickets', (before, userId) => eipApi.listTickets(before, null, userId));
 handle('eip:search-tickets', (q) => eipApi.searchTickets(q));
 handle('eip:advanced-search-tickets', (filters) => eipApi.advancedSearchTickets(filters));

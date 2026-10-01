@@ -331,11 +331,25 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .modal-header h2 { font-size: 15px; margin: 0; }
 .modal-header button { border: none; background: transparent; font-size: 16px; }
 /* ---- 附件圖片預覽 ---- */
-.image-preview-box { width: min(1000px, 94vw); max-height: 92vh; }
+/* 要給明確的height(不只是max-height)，.image-preview-wrap的flex:1才會真的撐滿一個固定可視區域，
+   放大圖片時才有地方可以捲動/拖曳查看，不然視窗高度只會跟著圖片原始尺寸走，放大後完全看不到超出的部分 */
+.image-preview-box { width: 96vw; max-width: 1800px; height: 92vh; }
 .image-preview-box .modal-header h2 { flex: 1; word-break: break-all; }
-.image-preview-wrap { flex: 1; margin-top: 8px; overflow: auto; text-align: center; }
+.image-preview-wrap {
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+  overflow: auto; /* 放大超出範圍時要看得到捲軸；用text-align置中(非flex+align-items)，捲軸才能正常捲到溢出內容的每個角落 */
+  text-align: center;
+}
 .image-preview-wrap img,
-.image-preview-wrap video { max-width: 100%; max-height: 80vh; }
+.image-preview-wrap video { max-width: 100%; max-height: 100%; transition: transform 0.08s linear; }
+/* 放大後(zoomed)游標變成手型，提示可以按住拖曳平移(拖動的其實是捲動位置，跟拖捲軸效果一樣)；
+   拖曳中(dragging)去掉transition，手感才會跟手不延遲 */
+.image-preview-wrap.zoomed { cursor: grab; }
+.image-preview-wrap.dragging { cursor: grabbing; }
+.image-preview-wrap.dragging img,
+.image-preview-wrap.dragging video { transition: none; }
 #mail-modal-body-wrap { flex: 1; margin-top: 8px; }
 #mail-modal-frame { width: 100%; height: 55vh; border: 1px solid #e2e5ea; border-radius: 4px; background: #fff; }
 .meta { color: #888; font-size: 12px; }
@@ -676,11 +690,78 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .project-card { cursor: default; }
 .project-card:hover { border-color: #e2e5ea; }
 .project-card.selected { border-color: #2f6fd8; box-shadow: 0 0 0 1px #2f6fd8 inset; }
+/* 加星關注：純本地功能，整張卡片背景上色，列表裡一眼就能認出要盯的專案 */
+.project-card.starred { background: #fff9e0; border-color: #f0dba0; }
+.project-card.starred.selected { border-color: #2f6fd8; }
+.project-card-top { display: flex; gap: 10px; align-items: flex-start; }
+.project-card-main { flex: 1 1 auto; min-width: 0; }
 .project-card .install-name { display: flex; align-items: center; gap: 6px; }
 .project-card .install-name .status-badge { margin-left: auto; }
+.btn-project-star {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: #d8a92f;
+}
+.btn-project-star:hover { transform: scale(1.15); }
 .project-parent { font-size: 11px; color: #8a3fd8; margin-top: 2px; }
 .project-card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .project-card-actions button { padding: 2px 8px; font-size: 12px; }
+
+/* 專案卡片右側：工程部/財務部切換卡片，對應EIP網頁manage/internal/index的部門卡片 */
+.project-dept-box { flex: 0 0 170px; width: 170px; border-left: 1px solid #eef0f3; padding-left: 12px; font-size: 12px; }
+.dept-card { border-radius: 5px; padding: 8px 10px; }
+.dept-card-top { display: flex; align-items: flex-start; gap: 6px; }
+.dept-icon { font-size: 18px; line-height: 1; }
+.dept-card-titles { min-width: 0; }
+.dept-card-title { font-weight: 700; font-size: 13px; }
+.dept-card-sub { font-size: 12px; margin-top: 1px; }
+.dept-card-days { font-size: 11px; color: #777; margin-top: 5px; line-height: 1.4; }
+.dept-card .btn-dept-transfer { margin-top: 7px; width: 100%; padding: 4px 6px; font-size: 12px; font-weight: 600; }
+.dept-theme-engineering { background: #fdf1e0; color: #b6720c; }
+.dept-theme-returned { background: #fbe6e6; color: #c94f4f; }
+.dept-theme-finance { background: #e3edfc; color: #2f6fd8; }
+.dept-theme-finance-done { background: #e4f4ea; color: #2f8a4f; }
+
+/* 四期收款：放在部門卡片右側，排成2x2四格；比橫向一整排4欄省寬度，比直向四行省高度 */
+.project-payment-box { flex: 0 0 190px; width: 190px; border-left: 1px solid #eef0f3; padding-left: 12px; font-size: 11px; }
+.payment-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-bottom: 6px; }
+.payment-summary { font-size: 11px; color: #556; }
+.payment-warn { color: #c94f4f; }
+.btn-payment-percent-toggle { flex: 0 0 auto; padding: 0 6px; font-size: 12px; line-height: 1.6; border-radius: 3px; }
+.payment-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+.payment-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.payment-cell-name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.payment-status-select { width: 100%; font-size: 11px; padding: 1px 2px; border-radius: 3px; }
+.payment-status-select.status-default { background: #f4f5f7; color: #778; }
+.payment-status-select.status-warning { background: #fdf1e0; color: #b6720c; }
+.payment-status-select.status-success { background: #e4f4ea; color: #2f8a4f; }
+.payment-status-select.status-danger { background: #fbe6e6; color: #c94f4f; }
+.payment-percent-form { margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: #f7f9fc; border-radius: 4px; padding: 6px; }
+.payment-percent-input { font-size: 11px; display: flex; align-items: center; gap: 3px; }
+.payment-percent-input input { width: 36px; padding: 1px 2px; }
+.payment-percent-form .btn-payment-percent-save { grid-column: span 2; padding: 2px 6px; font-size: 11px; }
+
+/* 工單狀態篩選按鈕(可複選)，對照EIP網頁manage/internal/index的狀態勾選按鈕，配色沿用該頁的bootstrap label顏色 */
+.ticket-status-bar { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.ticket-status-chip {
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.ticket-status-chip.active { opacity: 1; border-color: rgba(0, 0, 0, 0.15); font-weight: 600; }
+.ticket-status-chip.status-danger { background: #fbe6e6; color: #c94f4f; }
+.ticket-status-chip.status-warning { background: #fdf1e0; color: #b6720c; }
+.ticket-status-chip.status-success { background: #e4f4ea; color: #2f8a4f; }
+.ticket-status-chip.status-info { background: #e3edfc; color: #2f6fd8; }
+.ticket-status-chip.status-default { background: #eef1f6; color: #667; }
+.ticket-status-chip.status-qc { background: #f1e8fb; color: #8a3fd8; }
 
 /* 流程進度：側欄窄，16個階段改成自動換行的小方塊，階段間用箭頭串起來；顏色對應EIP網頁的流程進度欄 */
 .stage-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; margin-top: 6px; }

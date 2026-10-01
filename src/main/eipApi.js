@@ -24,12 +24,30 @@ async function listEngineers() {
   return res.data.data;
 }
 
-// 專案清單(含流程進度各階段的狀態)；status是逗號分隔的專案狀態代碼，不帶=全部
+// 專案清單(含流程進度各階段的狀態、工程部/財務部卡片、四期收款)；status是逗號分隔的專案狀態代碼，不帶=全部
 async function listProjects(q, status) {
   const params = {};
   if (q) params.q = q;
   if (status) params.status = status;
   const res = await client().get('/projects', { params });
+  return res.data.data;
+}
+
+// 專案轉部門(工程部<->財務部)，dept: 'engineering' | 'finance'
+async function projectDeptTransfer(projectId, dept) {
+  const res = await client().post(`/projects/${projectId}/dept-transfer`, { dept });
+  return res.data.data;
+}
+
+// 更新單期收款狀態，status: not_due|pending|paid|rejected
+async function projectPaymentUpdate(projectId, period, status) {
+  const res = await client().post(`/projects/${projectId}/payment`, { period, status });
+  return res.data.data;
+}
+
+// 一次保存四期收款比例，percents: {1: 30, 2: 40, 3: 30, 4: 0}
+async function projectPaymentPercentSave(projectId, percents) {
+  const res = await client().post(`/projects/${projectId}/payment-percent`, { percents });
   return res.data.data;
 }
 
@@ -130,6 +148,9 @@ module.exports = {
   whoami,
   listEngineers,
   listProjects,
+  projectDeptTransfer,
+  projectPaymentUpdate,
+  projectPaymentPercentSave,
   login,
   listTickets,
   searchTickets,

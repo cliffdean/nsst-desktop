@@ -49,4 +49,8 @@ const ticketMetaStore = new Store({ name: 'ticket-meta', defaults: {} });
 
 const todoStore = new Store({ name: 'todos', defaults: { items: [] } });
 
-module.exports = { settingsStore, timersStore, ticketMetaStore, todoStore };
+// 加星關注的專案：純本地功能，不回寫EIP，只是方便自己在專案查詢列表裡快速認出要盯的專案
+// { [project_id]: true }
+const projectStarStore = new Store({ name: 'project-stars', defaults: {} });
+
+module.exports = { settingsStore, timersStore, ticketMetaStore, todoStore, projectStarStore };

@@ -22,12 +22,25 @@ function fileExt(name) {
 }
 
 let imagePreviewUrl = '';
+let imagePreviewScale = 1; // Ctrl+滾輪縮放用，1=原始大小
+let imagePreviewDragStart = null; // { x, y, scrollLeft, scrollTop } 或 null(沒在拖曳)
+let imagePreviewDidDrag = false; // 這次按下滑鼠到放開之間有沒有真的拖曳過，用來擋掉放開時誤觸backdrop的關閉
+
+function currentPreviewTarget() {
+  return $('image-preview-video').classList.contains('hidden') ? $('image-preview-img') : $('image-preview-video');
+}
 
 function openMediaPreview(url, name, isVideo) {
   imagePreviewUrl = url;
+  imagePreviewScale = 1;
   $('image-preview-title').textContent = name || '';
   $('image-preview-img').classList.toggle('hidden', isVideo);
   $('image-preview-video').classList.toggle('hidden', !isVideo);
+  $('image-preview-img').style.transform = '';
+  $('image-preview-video').style.transform = '';
+  $('image-preview-wrap').classList.remove('zoomed');
+  $('image-preview-wrap').scrollLeft = 0;
+  $('image-preview-wrap').scrollTop = 0;
   if (isVideo) $('image-preview-video').src = url;
   else $('image-preview-img').src = url;
   $('image-preview-backdrop').classList.remove('hidden');
@@ -41,6 +54,24 @@ function closeImagePreview() {
   video.pause();
   video.removeAttribute('src');
   video.load();
+}
+
+// 圖片有時原始尺寸很小看不清楚：Ctrl+滾輪縮放，放大超出視窗範圍時用原生捲軸(可以直接拖捲軸，也支援按住圖片拖曳平移)查看
+function applyImagePreviewTransform() {
+  currentPreviewTarget().style.transform = `scale(${imagePreviewScale.toFixed(2)})`;
+  $('image-preview-wrap').classList.toggle('zoomed', imagePreviewScale > 1);
+}
+
+function zoomMediaPreview(deltaY) {
+  imagePreviewScale = Math.min(5, Math.max(0.3, imagePreviewScale + (deltaY < 0 ? 0.1 : -0.1)));
+  applyImagePreviewTransform();
+}
+
+function resetImagePreviewZoom() {
+  imagePreviewScale = 1;
+  applyImagePreviewTransform();
+  $('image-preview-wrap').scrollLeft = 0;
+  $('image-preview-wrap').scrollTop = 0;
 }
 
 // 附件連結點擊：圖片/影片→預覽視窗，其他→瀏覽器
@@ -62,11 +93,52 @@ function initMediaPreview() {
   $('btn-image-preview-close').addEventListener('click', closeImagePreview);
   $('btn-image-preview-open').addEventListener('click', () => window.api.shell.openExternal(imagePreviewUrl));
   $('image-preview-backdrop').addEventListener('click', (e) => {
+    // 剛拖完圖片放開滑鼠時，瀏覽器可能把放開當下的位置(常常已經移到背景區域)當成一次click事件，
+    // 若不擋掉會被下面這行誤判成「點了背景空白處」而關掉視窗，所以拖曳當下跳過這一次click
+    if (imagePreviewDidDrag) {
+      imagePreviewDidDrag = false;
+      return;
+    }
     if (e.target === e.currentTarget) closeImagePreview();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeImagePreview();
   });
+  // Ctrl+滾輪縮放；一定要用{passive:false}才能擋掉Chromium預設的「ctrl+滾輪=整個頁面縮放」行為
+  const wrap = $('image-preview-wrap');
+  wrap.addEventListener(
+    'wheel',
+    (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      zoomMediaPreview(e.deltaY);
+    },
+    { passive: false }
+  );
+  // 放大後(scale>1)按住滑鼠拖曳可以平移查看超出視窗的部分，直接拖動wrap的捲動位置(跟捲軸是同一套狀態，
+  // 用捲軸拖、用滑鼠拖內容效果一致)；沒放大時維持原本的滑鼠行為(例如影片控制列要能正常點)
+  wrap.addEventListener('mousedown', (e) => {
+    if (imagePreviewScale <= 1) return;
+    e.preventDefault();
+    imagePreviewDragStart = { x: e.clientX, y: e.clientY, scrollLeft: wrap.scrollLeft, scrollTop: wrap.scrollTop };
+    imagePreviewDidDrag = false;
+    wrap.classList.add('dragging');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!imagePreviewDragStart) return;
+    const dx = e.clientX - imagePreviewDragStart.x;
+    const dy = e.clientY - imagePreviewDragStart.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) imagePreviewDidDrag = true; // 超過3px才算真的拖曳，單純手滑一下不算
+    wrap.scrollLeft = imagePreviewDragStart.scrollLeft - dx;
+    wrap.scrollTop = imagePreviewDragStart.scrollTop - dy;
+  });
+  window.addEventListener('mouseup', () => {
+    if (!imagePreviewDragStart) return;
+    imagePreviewDragStart = null;
+    wrap.classList.remove('dragging');
+  });
+  // 雙擊快速恢復100%大小，不用慢慢滾滾輪縮回去
+  wrap.addEventListener('dblclick', resetImagePreviewZoom);
 }
 
 function formatSeconds(totalSeconds) {

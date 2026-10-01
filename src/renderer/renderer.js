@@ -13,6 +13,7 @@ const state = {
   engineers: [],
   pendingFileIds: [], // 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
   todos: [],
+  starredProjects: new Set(), // 加星關注的專案id(字串)，純本地功能，不回寫EIP
   advSearch: {
     formVisible: false, // 進階搜尋「表單」是否展開；純UI狀態，收合表單不影響目前是否套用了進階條件
     active: false, // 是否已套用進階條件(搜尋走advanced-search API、上面的簡易搜尋框停用、顯示條件標籤)；收合表單不會動到這個值
@@ -641,19 +642,59 @@ async function jumpToSiteFromTicket() {
 let projectSearchTimer = null;
 let projectSearchSeq = 0; // 連續打字會發出好幾次搜尋，只採用最後一次的結果，避免晚回來的舊結果蓋掉新的
 let projectTicketsSeq = 0;
-const projectPanel = { status: '1', projects: [], selected: null }; // selected = { projectId, stage }，stage為null代表全部階段
+// selected = { projectId, stage }，stage為null代表全部階段；ticketStatusFilter是目前勾選的工單狀態代碼集合(可複選，空集合=不篩選)
+const projectPanel = { status: '1', projects: [], selected: null, ticketStatusFilter: new Set() };
+
+// 工單狀態篩選按鈕，對照EIP網頁manage/internal/InternalController的$h_status/$h_colors(不含9已刪除，這個列表本來就排除已刪除)
+const TICKET_STATUS_OPTIONS = [
+  [0, '新任務', 'status-danger'],
+  [1, '已指派', 'status-warning'],
+  [2, '已完成', 'status-success'],
+  [3, '已暫停', 'status-info'],
+  [4, '成功', 'status-success'],
+  [5, '失敗', 'status-info'],
+  [6, '未定義', 'status-info'],
+  [7, '追蹤中', 'status-danger'],
+  [8, '已關閉', 'status-default'],
+  [10, '品保中', 'status-qc'],
+];
 
 // 專案狀態配色沿用EIP網頁：未進行灰、進行中橘、已完成綠、取消/終止紅
 const PROJECT_STATUS_CLASS = { default: 'status-default', warning: 'status-warning', success: 'status-success', danger: 'status-danger' };
 
-function openProjectPanel() {
+async function openProjectPanel() {
   $('sidebar-default-view').classList.add('hidden');
   $('install-panel').classList.add('hidden');
   $('ticket-search-panel').classList.add('hidden');
   $('project-panel').classList.remove('hidden');
   closeProjectTickets();
   $('project-search').focus();
+  await loadStarredProjects();
   runProjectSearch();
+}
+
+// 加星關注的專案：純本地功能，不回寫EIP，只是方便在列表裡快速認出要盯的專案(背景會上色)
+async function loadStarredProjects() {
+  const ids = await call(window.api.projectStar.list());
+  if (ids) state.starredProjects = new Set(ids.map(String));
+}
+
+function toggleProjectStar(projectId) {
+  const key = String(projectId);
+  call(window.api.projectStar.toggle(key), (err) => alert('加星失敗：' + err)).then((starred) => {
+    if (starred === undefined) return;
+    if (starred) state.starredProjects.add(key);
+    else state.starredProjects.delete(key);
+    const card = document.querySelector(`.project-card[data-id="${key}"]`);
+    if (card) {
+      card.classList.toggle('starred', starred);
+      const starBtn = card.querySelector('.btn-project-star');
+      if (starBtn) {
+        starBtn.textContent = starred ? '★' : '☆';
+        starBtn.title = starred ? '取消關注' : '加星關注';
+      }
+    }
+  });
 }
 
 function closeProjectPanel() {
@@ -688,6 +729,11 @@ async function runProjectSearch() {
   renderProjectSelection();
 }
 
+// 跟後端ProjectPayment::$statusText/EIP網頁配色一致
+const PAYMENT_STATUS_TEXT = { not_due: '未到期', pending: '待請款', paid: '已收款', rejected: '請款被退回' };
+const PAYMENT_STATUS_CLASS = { not_due: 'status-default', pending: 'status-warning', paid: 'status-success', rejected: 'status-danger' };
+const DEPT_THEME_ICON = { engineering: '⚙️', finance: '💰', 'finance-done': '💰', returned: '🔁' };
+
 function projectCardHtml(p) {
   const metaItem = (label, value) => (value ? `<span><span class="ts-k">${label}</span> ${escapeHtml(value)}</span>` : '');
   const stages = (p.stages || [])
@@ -696,22 +742,111 @@ function projectCardHtml(p) {
       return `${i ? '<span class="stage-arrow">›</span>' : ''}<button type="button" class="stage-chip stage-s${s.state}" data-pid="${p.id}" data-stage="${s.index}" title="${escapeHtml(tip)}" ${s.state === 0 ? 'disabled' : ''}>${escapeHtml(s.name)}</button>`;
     })
     .join('');
-  return `<div class="install-card project-card" data-id="${p.id}">
-    <div class="install-name">#${p.id} ${escapeHtml(p.name || '(無名稱)')}<span class="status-badge ${PROJECT_STATUS_CLASS[p.status_color] || 'status-default'}">${escapeHtml(p.status_text || '')}</span></div>
-    ${p.parent_name ? `<div class="project-parent">追加專案（主專案：${escapeHtml(p.parent_name)}）</div>` : ''}
-    <div class="ts-card-meta">
-      ${metaItem('代碼', p.code)}
-      ${metaItem('客戶', p.customer_name)}
-      ${metaItem('經銷商', p.dealer_name)}
-      ${metaItem('業務', p.sales_name)}
-      ${metaItem('類型', p.prj_type)}
-    </div>
-    <div class="stage-flow">${stages}</div>
-    <div class="project-card-actions">
-      <button type="button" class="btn-project-all-tickets" data-pid="${p.id}">全部工單</button>
-      ${p.install_list_id ? `<button type="button" class="btn-project-site" data-site="${p.install_list_id}">案場資訊</button>` : ''}
+  const starred = state.starredProjects.has(String(p.id));
+  return `<div class="install-card project-card${starred ? ' starred' : ''}" data-id="${p.id}">
+    <div class="project-card-top">
+      <div class="project-card-main">
+        <div class="install-name">
+          <button type="button" class="btn-project-star" data-pid="${p.id}" title="${starred ? '取消關注' : '加星關注'}">${starred ? '★' : '☆'}</button>
+          #${p.id} ${escapeHtml(p.name || '(無名稱)')}<span class="status-badge ${PROJECT_STATUS_CLASS[p.status_color] || 'status-default'}">${escapeHtml(p.status_text || '')}</span>
+        </div>
+        ${p.parent_name ? `<div class="project-parent">追加專案（主專案：${escapeHtml(p.parent_name)}）</div>` : ''}
+        <div class="ts-card-meta">
+          ${metaItem('代碼', p.code)}
+          ${metaItem('客戶', p.customer_name)}
+          ${metaItem('經銷商', p.dealer_name)}
+          ${metaItem('業務', p.sales_name)}
+          ${metaItem('類型', p.prj_type)}
+        </div>
+        <div class="stage-flow">${stages}</div>
+        <div class="project-card-actions">
+          <button type="button" class="btn-project-all-tickets" data-pid="${p.id}">全部工單</button>
+          ${p.install_list_id ? `<button type="button" class="btn-project-site" data-site="${p.install_list_id}">案場資訊</button>` : ''}
+        </div>
+      </div>
+      <div class="project-dept-box" data-pid="${p.id}">${projectDeptCardHtml(p)}</div>
+      <div class="project-payment-box" data-pid="${p.id}">${projectPaymentGridHtml(p)}</div>
     </div>
   </div>`;
+}
+
+// 工程部/財務部切換卡片，放在專案卡片右側窄欄
+function projectDeptCardHtml(p) {
+  const dv = p.dept_view;
+  if (!dv) return '<p class="meta">無部門資料</p>';
+  const deptIcon = DEPT_THEME_ICON[dv.theme] || '📁';
+  return `
+    <div class="dept-card dept-theme-${dv.theme}">
+      <div class="dept-card-top">
+        <span class="dept-icon">${deptIcon}</span>
+        <div class="dept-card-titles">
+          <div class="dept-card-title">${escapeHtml(dv.title)}</div>
+          <div class="dept-card-sub">${escapeHtml(dv.sub)}</div>
+        </div>
+      </div>
+      <div class="dept-card-days">已停留 ${dv.days} 天${dv.since ? `<br>自 ${escapeHtml(dv.since)}` : ''}</div>
+      <button type="button" class="btn-dept-transfer" data-pid="${p.id}" data-target="${dv.target}">➜ ${escapeHtml(dv.btn_text)}</button>
+    </div>
+  `;
+}
+
+// 四期收款排成2x2四格，放在部門卡片右側；比橫向一整排4欄省寬度，比直向四行省高度
+function projectPaymentGridHtml(p) {
+  const payments = p.payments || {};
+  const periods = Object.keys(payments).sort((a, b) => Number(a) - Number(b));
+  if (!periods.length) return '';
+
+  let totalPercent = 0;
+  let paidPercent = 0;
+  periods.forEach((period) => {
+    const percent = Number(payments[period].percent) || 0;
+    totalPercent += percent;
+    if (payments[period].status === 'paid') paidPercent += percent;
+  });
+  const totalWarn = totalPercent !== 100 ? ' <span class="payment-warn">⚠</span>' : '';
+
+  const cells = periods
+    .map((period) => {
+      const info = payments[period];
+      const options = Object.keys(PAYMENT_STATUS_TEXT)
+        .map((key) => `<option value="${key}" ${info.status === key ? 'selected' : ''}>${PAYMENT_STATUS_TEXT[key]}</option>`)
+        .join('');
+      return `<div class="payment-cell">
+        <span class="payment-cell-name">${escapeHtml(info.name)}<span class="meta">${info.percent}%</span></span>
+        <select class="payment-status-select ${PAYMENT_STATUS_CLASS[info.status] || ''}" data-pid="${p.id}" data-period="${period}">${options}</select>
+      </div>`;
+    })
+    .join('');
+
+  const percentInputs = periods
+    .map((period) => `<label class="payment-percent-input">${escapeHtml(payments[period].name)}
+      <input type="number" min="0" max="100" data-period="${period}" value="${payments[period].percent}" />%</label>`)
+    .join('');
+
+  return `
+    <div class="payment-summary-row">
+      <span class="payment-summary">已收${paidPercent}%／${totalPercent}%${totalWarn}</span>
+      <button type="button" class="btn-payment-percent-toggle" data-pid="${p.id}" title="編輯收款比例">✎</button>
+    </div>
+    <div class="payment-grid">${cells}</div>
+    <div class="payment-percent-form hidden" data-pid="${p.id}">
+      ${percentInputs}
+      <button type="button" class="btn-payment-percent-save" data-pid="${p.id}">✓ 儲存比例</button>
+    </div>
+  `;
+}
+
+// 專案的部門/收款資料有異動(轉部門、改收款狀態、改比例)後，更新本地快取並只重繪該張卡片的部門卡片跟收款格，不用整個重新搜尋
+function applyProjectDeptUpdate(projectId, data) {
+  const project = projectPanel.projects.find((p) => String(p.id) === String(projectId));
+  if (!project) return;
+  project.current_dept = data.current_dept;
+  project.dept_view = data.dept_view;
+  project.payments = data.payments;
+  const deptBox = document.querySelector(`.project-dept-box[data-pid="${projectId}"]`);
+  if (deptBox) deptBox.innerHTML = projectDeptCardHtml(project);
+  const paymentBox = document.querySelector(`.project-payment-box[data-pid="${projectId}"]`);
+  if (paymentBox) paymentBox.innerHTML = projectPaymentGridHtml(project);
 }
 
 // 目前選中的專案卡片框起來、選中的階段加外框，讓下方工單列表對得上是哪個專案的哪個階段
@@ -731,16 +866,46 @@ async function openProjectTickets(projectId, stage) {
   if (!project) return;
   const stageInfo = stage != null ? project.stages.find((s) => s.index === stage) : null;
   projectPanel.selected = { projectId: project.id, stage };
+  projectPanel.ticketStatusFilter = new Set(); // 每次重新點流程階段/全部工單，狀態篩選重置
   renderProjectSelection();
 
   $('project-panel').classList.add('has-detail');
   $('project-tickets').classList.remove('hidden');
   $('project-tickets-title').textContent = `▾ ${project.name}　${stageInfo ? stageInfo.name : '全部階段'}`;
+  renderTicketStatusFilterBar();
+  await loadProjectTickets();
+}
+
+// 工單狀態篩選按鈕列：可複選，對照EIP網頁manage/internal/index的狀態勾選按鈕
+function renderTicketStatusFilterBar() {
+  $('project-tickets-status-bar').innerHTML = TICKET_STATUS_OPTIONS.map(([code, text, cls]) => {
+    const active = projectPanel.ticketStatusFilter.has(code);
+    return `<button type="button" class="ticket-status-chip ${cls}${active ? ' active' : ''}" data-status="${code}">${text}${active ? ' ✓' : ''}</button>`;
+  }).join('');
+}
+
+function toggleTicketStatusFilter(code) {
+  if (projectPanel.ticketStatusFilter.has(code)) projectPanel.ticketStatusFilter.delete(code);
+  else projectPanel.ticketStatusFilter.add(code);
+  renderTicketStatusFilterBar();
+  loadProjectTickets();
+}
+
+// 依目前選定的專案/階段/狀態篩選重新查詢工單列表；不帶狀態篩選時維持原本「排除已刪除」的範圍
+async function loadProjectTickets() {
+  const sel = projectPanel.selected;
+  if (!sel) return;
+  const project = projectPanel.projects.find((p) => String(p.id) === String(sel.projectId));
+  if (!project) return;
+
   $('project-tickets-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
 
   const seq = ++projectTicketsSeq;
-  const filters = { project_id: project.id, status: '0,1,2,3,4,5,6,7,8,10', order_by: 'id', order_dir: 'desc', per_page: 100 };
-  if (stage != null) filters.task_stage = stage;
+  const statuses = projectPanel.ticketStatusFilter.size
+    ? Array.from(projectPanel.ticketStatusFilter).join(',')
+    : '0,1,2,3,4,5,6,7,8,10';
+  const filters = { project_id: project.id, status: statuses, order_by: 'id', order_dir: 'desc', per_page: 100 };
+  if (sel.stage != null) filters.task_stage = sel.stage;
   const res = await call(window.api.eip.advancedSearchTickets(filters), (err) => {
     if (seq === projectTicketsSeq) $('project-tickets-list').innerHTML = `<p style="color:#d84f4f;">讀取工單失敗：${escapeHtml(err)}</p>`;
   });
@@ -762,6 +927,11 @@ async function openProjectTickets(projectId, stage) {
 }
 
 function onProjectResultsClick(e) {
+  const starBtn = e.target.closest('.btn-project-star');
+  if (starBtn) {
+    toggleProjectStar(starBtn.dataset.pid);
+    return;
+  }
   const chip = e.target.closest('.stage-chip');
   if (chip && !chip.disabled) {
     openProjectTickets(chip.dataset.pid, Number(chip.dataset.stage));
@@ -776,7 +946,56 @@ function onProjectResultsClick(e) {
   if (siteBtn) {
     openInstallPanel();
     openInstallDetail(siteBtn.dataset.site);
+    return;
   }
+
+  const deptBtn = e.target.closest('.btn-dept-transfer');
+  if (deptBtn) {
+    deptBtn.disabled = true;
+    call(window.api.eip.projectDeptTransfer(deptBtn.dataset.pid, deptBtn.dataset.target), (err) => {
+      alert('轉部門失敗：' + err);
+      deptBtn.disabled = false;
+    }).then((data) => {
+      if (data) applyProjectDeptUpdate(deptBtn.dataset.pid, data);
+    });
+    return;
+  }
+
+  const percentToggleBtn = e.target.closest('.btn-payment-percent-toggle');
+  if (percentToggleBtn) {
+    const box = percentToggleBtn.closest('.project-payment-box');
+    box.querySelector('.payment-percent-form').classList.toggle('hidden');
+    return;
+  }
+
+  const percentSaveBtn = e.target.closest('.btn-payment-percent-save');
+  if (percentSaveBtn) {
+    const form = percentSaveBtn.closest('.payment-percent-form');
+    const percents = {};
+    form.querySelectorAll('input[data-period]').forEach((input) => {
+      percents[input.dataset.period] = Number(input.value) || 0;
+    });
+    percentSaveBtn.disabled = true;
+    call(window.api.eip.projectPaymentPercentSave(percentSaveBtn.dataset.pid, percents), (err) => {
+      alert('儲存收款比例失敗：' + err);
+      percentSaveBtn.disabled = false;
+    }).then((data) => {
+      if (data) applyProjectDeptUpdate(percentSaveBtn.dataset.pid, data);
+    });
+  }
+}
+
+// select下拉選單要用change事件，不是click
+function onProjectResultsChange(e) {
+  const select = e.target.closest('.payment-status-select');
+  if (!select) return;
+  select.disabled = true;
+  call(window.api.eip.projectPaymentUpdate(select.dataset.pid, select.dataset.period, select.value), (err) => {
+    alert('更新收款狀態失敗：' + err);
+    runProjectSearch(); // 失敗時select的值已經被瀏覽器改成使用者選的新值，重新整個查一次恢復成伺服器的真實狀態
+  }).then((data) => {
+    if (data) applyProjectDeptUpdate(select.dataset.pid, data); // 重繪會重建select，disabled狀態自然解除
+  });
 }
 
 function switchProjectStatus(status) {
@@ -2696,7 +2915,12 @@ $('btn-install-tickets-more').addEventListener('click', loadMoreInstallTickets);
 $('btn-open-project-search').addEventListener('click', openProjectPanel);
 $('btn-project-back').addEventListener('click', closeProjectPanel);
 $('btn-project-tickets-close').addEventListener('click', closeProjectTickets);
+$('project-tickets-status-bar').addEventListener('click', (e) => {
+  const chip = e.target.closest('.ticket-status-chip');
+  if (chip) toggleTicketStatusFilter(Number(chip.dataset.status));
+});
 $('project-results').addEventListener('click', onProjectResultsClick);
+$('project-results').addEventListener('change', onProjectResultsChange);
 $('project-search').addEventListener('input', () => {
   clearTimeout(projectSearchTimer);
   projectSearchTimer = setTimeout(runProjectSearch, 300);
