@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld('api', {
     getTicket: invoke('eip:get-ticket'),
     replyTicket: invoke('eip:reply-ticket'),
     transferTicket: invoke('eip:transfer-ticket'),
+    updateTicketVersion: invoke('eip:update-ticket-version'),
+    addTicketVersion: invoke('eip:add-ticket-version'),
     uploadFile: invoke('eip:upload-file'),
     attachFile: invoke('eip:attach-file'),
   },
@@ -77,6 +79,7 @@ contextBridge.exposeInMainWorld('api', {
   mail: {
     listRecent: invoke('mail:list-recent'),
     getMessage: invoke('mail:get-message'),
+    saveAttachment: invoke('mail:save-attachment'),
   },
   calendar: {
     listRange: invoke('calendar:list-range'),
@@ -92,6 +95,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   window: {
     openTicket: invoke('window:open-ticket'),
+    jumpInMain: invoke('window:jump-in-main'),
+    onJump: (callback) => ipcRenderer.on('window:jump', (_event, data) => callback(data)),
   },
   dialog: {
     pickFile: invoke('dialog:pick-file'),

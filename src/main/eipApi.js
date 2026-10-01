@@ -121,6 +121,18 @@ async function transferTicket(id, info, chgUserId) {
   return res.data.data;
 }
 
+// 只改工單的系統功能版本，version是後端search-options回傳versions清單裡的value(project_version索引)
+async function updateTicketVersion(id, version) {
+  const res = await client().post(`/tickets/${id}/version`, { version });
+  return res.data.data;
+}
+
+// 在系統功能版本清單最後面新增一個版本(僅限專管/總經理)，回傳{value, text, versions}
+async function addTicketVersion(name) {
+  const res = await client().post('/ticket-versions', { name });
+  return res.data.data;
+}
+
 async function attachFile(id, fileId) {
   const res = await client().post(`/tickets/${id}/attach`, { fileid: fileId });
   return res.data.data;
@@ -165,6 +177,8 @@ module.exports = {
   getTicket,
   replyTicket,
   transferTicket,
+  updateTicketVersion,
+  addTicketVersion,
   attachFile,
   uploadFile,
   searchInstallLists,

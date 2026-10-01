@@ -190,11 +190,137 @@ function validTime(value) {
   return value && !String(value).startsWith('0000-00-00') ? String(value) : '';
 }
 
+// value可以是{ html }：已經組好的HTML，空值也照樣顯示(給可編輯欄位用)
 function ticketInfoRows(rows) {
   return rows
     .filter(([, value]) => value != null && value !== '')
-    .map(([label, value]) => `<span class="info-label">${label}</span><span class="info-value">${escapeHtmlPreserveNewlines(value)}</span>`)
+    .map(([label, value]) => {
+      const html = typeof value === 'object' ? value.html : escapeHtmlPreserveNewlines(value);
+      return `<span class="info-label">${label}</span><span class="info-value">${html}</span>`;
+    })
     .join('');
+}
+
+// 系統功能版本：顯示文字+筆按鈕，點筆變成下拉選單，筆變成保存按鈕；綁定事件見bindVersionEditor
+function versionEditorHtml(ticket) {
+  return `<span class="version-editor"><span class="version-value">${escapeHtml(ticket.version_text || '-')}</span>`
+    + '<button type="button" class="btn-version-edit" title="修改系統功能版本">✎</button>'
+    + '<button type="button" class="btn-version-cancel hidden" title="取消修改">✕</button></span>';
+}
+
+// 版本選項跟後端search-options同一份(parameter_settings的project_version)，同一個視窗只抓一次
+let versionOptionsPromise = null;
+function loadVersionOptions() {
+  if (!versionOptionsPromise) {
+    versionOptionsPromise = call(window.api.eip.getTicketSearchOptions()).then((opts) => {
+      if (!opts) versionOptionsPromise = null; // 失敗的話下次再重抓
+      return opts ? opts.versions || [] : null;
+    });
+  }
+  return versionOptionsPromise;
+}
+
+// 能不能在下拉選單新增版本(專管/總經理)，各視窗whoami完後設定，後端也會再檢查一次
+const versionPermission = { canAdd: false };
+const NEW_VERSION_VALUE = '__new__';
+
+// ticket是目前顯示中的工單物件，存檔成功會直接更新它的version/version_text，onSaved給呼叫端同步其他畫面用
+function bindVersionEditor(container, ticket, onSaved) {
+  const box = container.querySelector('.version-editor');
+  if (!box) return;
+  const btn = box.querySelector('.btn-version-edit');
+  const cancelBtn = box.querySelector('.btn-version-cancel');
+  const valueEl = box.querySelector('.version-value');
+  let field = null; // 編輯中的元素：版本下拉選單，或選了「新增版本」後換成的文字輸入框
+
+  // 回到顯示模式：輸入元件換回文字，保存鈕變回筆，隱藏取消鈕
+  const exitEdit = () => {
+    if (field) field.replaceWith(valueEl);
+    field = null;
+    btn.textContent = '✎';
+    btn.title = '修改系統功能版本';
+    cancelBtn.classList.add('hidden');
+  };
+  cancelBtn.addEventListener('click', exitEdit);
+
+  const swapField = (el) => {
+    (field || valueEl).replaceWith(el);
+    field = el;
+    el.focus();
+  };
+
+  const showNewVersionInput = () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'version-new-input';
+    input.placeholder = '輸入新版本名稱';
+    swapField(input);
+  };
+
+  const showSelect = (options) => {
+    const select = document.createElement('select');
+    select.className = 'version-select';
+    select.innerHTML = options
+      .map((o) => `<option value="${o.value}" ${o.value === ticket.version ? 'selected' : ''}>${escapeHtml(o.text)}</option>`)
+      .join('')
+      + (versionPermission.canAdd ? `<option value="${NEW_VERSION_VALUE}">＋ 新增版本...</option>` : '');
+    // 原本沒設定或對不到清單的版本，先停在空白，避免沒注意就存成第一個選項
+    if (!options.some((o) => o.value === ticket.version)) select.selectedIndex = -1;
+    select.addEventListener('change', () => {
+      if (select.value === NEW_VERSION_VALUE) showNewVersionInput();
+    });
+    swapField(select);
+  };
+
+  // 新增版本是改全公司共用的清單，先確認；成功後更新本視窗的選項快取，回傳新版本的value
+  const addNewVersion = async (name) => {
+    if (!confirm(`確定要在全公司共用的系統功能版本清單最後面新增「${name}」嗎？
+新增後無法從這裡刪除，只能到EIP參數設定處理。`)) return null;
+    const data = await call(window.api.eip.addTicketVersion(name), (err) => alert('新增版本失敗：' + err));
+    if (!data) return null;
+    versionOptionsPromise = Promise.resolve(data.versions);
+    return data.value;
+  };
+
+  btn.addEventListener('click', async () => {
+    if (!field) {
+      btn.disabled = true;
+      const options = await loadVersionOptions();
+      btn.disabled = false;
+      if (!options) return;
+      showSelect(options);
+      btn.textContent = '💾';
+      btn.title = '保存系統功能版本';
+      cancelBtn.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true;
+    cancelBtn.disabled = true;
+    try {
+      let version;
+      if (field.tagName === 'INPUT') {
+        const name = field.value.trim();
+        if (!name) return alert('請輸入新版本名稱');
+        if (name.includes(',')) return alert('版本名稱不可包含逗號');
+        version = await addNewVersion(name);
+        if (version == null) return;
+      } else {
+        if (field.value === '') return alert('請先選擇系統功能版本');
+        version = Number(field.value);
+      }
+      const data = await call(window.api.eip.updateTicketVersion(ticket.id, version), (err) => alert('修改系統功能版本失敗：' + err));
+      if (!data) return;
+      ticket.version = data.version;
+      ticket.version_text = data.version_text;
+      valueEl.textContent = data.version_text || '-';
+      exitEdit();
+      if (onSaved) onSaved(data);
+    } finally {
+      btn.disabled = false;
+      cancelBtn.disabled = false;
+    }
+  });
 }
 
 // 一則回覆：回覆人／時間／當時標記的狀態、實際工作時段與耗時、回覆內容(EIP富文本HTML)、附檔
@@ -247,7 +373,7 @@ function ticketFullInfoRows(ticket) {
     ['反應人', ticket.c_user_name],
     ['客戶名稱', ticket.customer_name],
     ['經銷商', ticket.dealer_name],
-    ['系統功能版本', ticket.version_text],
+    ['系統功能版本', { html: versionEditorHtml(ticket) }],
     ['負責業務', ticket.sales_name],
     ['預計工時', estimate],
     ['創建日期', validTime(ticket.created_at)],

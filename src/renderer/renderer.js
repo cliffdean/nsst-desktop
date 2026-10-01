@@ -509,6 +509,7 @@ async function openInstallDetail(id) {
 
   state.currentInstallList = data;
   $('install-detail-name').textContent = `${data.name || ''} (${data.code || ''})`;
+  $('btn-install-jump-to-project').classList.toggle('hidden', !data.project_id);
   const basicRows = [
     ['地址', data.address],
     ['聯絡人', data.contact],
@@ -577,7 +578,7 @@ function renderInstallDetailTickets(tickets, hasMore) {
         .map(
           (t) => `<div class="mini-ticket-row mini-ticket-link" data-id="${t.id}">#${t.id} ${escapeHtml(t.summary || '')}${
             t.p_user_name ? `　<span class="meta">完成人：${escapeHtml(t.p_user_name)}</span>` : ''
-          }</div>`
+          }${t.version_text ? `　<span class="meta">版本：${escapeHtml(t.version_text)}</span>` : ''}</div>`
         )
         .join('')
     : '<p style="color:#888;">沒有找到相關工單</p>';
@@ -663,7 +664,8 @@ const TICKET_STATUS_OPTIONS = [
 // 專案狀態配色沿用EIP網頁：未進行灰、進行中橘、已完成綠、取消/終止紅
 const PROJECT_STATUS_CLASS = { default: 'status-default', warning: 'status-warning', success: 'status-success', danger: 'status-danger' };
 
-async function openProjectPanel() {
+// skipInitialSearch=true時不要先撈一次預設清單，讓呼叫端(jumpToProject)自己帶條件查
+async function openProjectPanel(skipInitialSearch = false) {
   $('sidebar-default-view').classList.add('hidden');
   $('install-panel').classList.add('hidden');
   $('ticket-search-panel').classList.add('hidden');
@@ -671,7 +673,25 @@ async function openProjectPanel() {
   closeProjectTickets();
   $('project-search').focus();
   await loadStarredProjects();
-  runProjectSearch();
+  if (!skipInitialSearch) runProjectSearch();
+}
+
+// 工單詳情／工單查詢詳情／裝機單共用：跳去專案查詢看這個專案。專案可能已完成或取消，所以狀態切成「全部」，
+// 用專案編號搜尋後框起並捲到那張卡片(關鍵字是模糊比對，同時搜到其他專案也沒關係)
+async function jumpToProject(projectId) {
+  if (!projectId) return;
+  await openProjectPanel(true);
+  projectPanel.status = '';
+  document.querySelectorAll('.project-status-btn').forEach((el) => el.classList.toggle('active', el.dataset.status === ''));
+  $('project-search').value = String(projectId);
+  await runProjectSearch();
+  const card = $('project-results').querySelector(`.project-card[data-id="${projectId}"]`);
+  if (!card) {
+    alert(`在專案查詢裡找不到專案#${projectId}`);
+    return;
+  }
+  card.classList.add('selected');
+  card.scrollIntoView({ block: 'center' });
 }
 
 // 加星關注的專案：純本地功能，不回寫EIP，只是方便在列表裡快速認出要盯的專案(背景會上色)
@@ -1048,6 +1068,15 @@ function closeTicketSearchDetail() {
   $('ticket-search-detail').classList.add('hidden');
 }
 
+// 詳情頁改了系統功能版本後，左側工單清單裡同一張單也跟著更新，不用等下次重新整理
+function syncTicketVersion(ticketId, data) {
+  const t = state.tickets.find((x) => String(x.id) === String(ticketId));
+  if (!t) return;
+  t.version = data.version;
+  t.version_text = data.version_text;
+  renderTicketList();
+}
+
 // 欄位對齊EIP總表；空值的欄位直接不顯示，避免卡片塞滿「-」
 function ticketSearchCardHtml(t) {
   const metaItem = (label, value) =>
@@ -1066,6 +1095,7 @@ function ticketSearchCardHtml(t) {
           ${metaItem('反應人', t.c_user_name)}
           ${metaItem('客戶', t.customer_name)}
           ${metaItem('經銷商', t.dealer_name)}
+          ${metaItem('系統功能版本', t.version_text)}
         </div>
         <div class="ts-card-meta">
           ${metaItem('開始', t.start_time)}
@@ -1516,11 +1546,13 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('ticket-search-detail-title').textContent = ticket.summary || '(無摘要)';
   $('ticket-search-detail-id').textContent = formatTicketNo(ticket.id);
   $('btn-ts-jump-to-site').classList.toggle('hidden', !ticket.project_id);
+  $('btn-ts-jump-to-project').classList.toggle('hidden', !ticket.project_id);
   // 轉單僅限「專管」身份，且只有「已指派」狀態的工單可以轉(跟後端transfer()的限制一致)
   $('btn-ts-transfer').classList.toggle('hidden', !state.canTransferTicket || ticket.status !== 1);
   state.currentTicketSearchDetail = ticket; // 給複製工單號／跳去裝機單查詢／轉單的按鈕用
 
   $('ticket-search-detail-basic').innerHTML = ticketFullInfoRows(ticket);
+  bindVersionEditor($('ticket-search-detail-basic'), ticket, (data) => syncTicketVersion(ticket.id, data));
 
   // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
   $('ticket-search-detail-desc').innerHTML = ticket.description || '(無說明)';
@@ -1605,6 +1637,7 @@ async function openMailDetail(uid) {
   $('mail-modal-subject').textContent = '讀取中...';
   $('mail-modal-meta').textContent = '';
   $('mail-modal-frame').srcdoc = '';
+  renderMailAttachments(uid, []);
   $('mail-modal-backdrop').classList.remove('hidden');
 
   const msg = await call(window.api.mail.getMessage(uid), (err) => {
@@ -1615,12 +1648,14 @@ async function openMailDetail(uid) {
 
   $('mail-modal-subject').textContent = msg.subject;
   $('mail-modal-meta').textContent = `${msg.from}　${msg.date ? new Date(msg.date).toLocaleString('zh-Hant') : ''}`;
-  // 信件內容可能來自不明寄件者，一律丟進沒有任何權限(sandbox="")的iframe呈現，避免裡面的script/連結影響到App本身
+  // 信件內容可能來自不明寄件者，一律丟進不能執行script的sandbox iframe呈現，避免影響到App本身；
+  // 只開放popup讓連結可點，加<base target="_blank">讓連結都走新視窗，再由主程序轉給系統瀏覽器開
   if (msg.html) {
-    $('mail-modal-frame').srcdoc = msg.html;
+    $('mail-modal-frame').srcdoc = `<base target="_blank">${msg.html}`;
   } else {
     $('mail-modal-frame').srcdoc = `<pre style="white-space:pre-wrap;font-family:inherit;">${escapeHtml(msg.text || '(無內容)')}</pre>`;
   }
+  renderMailAttachments(uid, msg.attachments || []);
 
   // 後端已回寫伺服器標記已讀，畫面先立即更新這封信與角標，再重新整理一次跟伺服器對齊
   const item = $('mail-list').querySelector(`.mail-item[data-uid="${uid}"]`);
@@ -1632,6 +1667,24 @@ async function openMailDetail(uid) {
     badge.classList.toggle('hidden', remaining === 0);
   }
   refreshMail();
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 附件點了就跳另存新檔，存好後會在檔案總管裡選取該檔
+function renderMailAttachments(uid, attachments) {
+  const box = $('mail-modal-attachments');
+  box.classList.toggle('hidden', !attachments.length);
+  box.innerHTML = attachments
+    .map((a) => `<button class="mail-attachment" data-index="${a.index}" title="另存新檔">📎 ${escapeHtml(a.filename)}<span class="size">${formatFileSize(a.size)}</span></button>`)
+    .join('');
+  box.querySelectorAll('.mail-attachment').forEach((el) => {
+    el.addEventListener('click', () => call(window.api.mail.saveAttachment(uid, Number(el.dataset.index))));
+  });
 }
 
 function closeMailModal() {
@@ -1960,7 +2013,7 @@ function renderTicketList() {
           <span>#${t.id} ${t.project_name || t.name || ''}</span>${statusBadge(t)}
         </div>
         <div class="summary">${t.summary || ''}</div>
-        <div class="meta">開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}</div>
+        <div class="meta">開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}${t.version_text ? `　版本：${escapeHtml(t.version_text)}` : ''}</div>
         ${readonly ? '' : timerControlsHtml(t)}
         <div class="card-actions-row">
           <button class="btn-card-copy-id" data-id="${t.id}" title="複製工單號到剪貼簿">複製單號</button>
@@ -2583,6 +2636,7 @@ async function openTicketDetail(id) {
     ? `所屬專案：${ticket.project_name} (id=${ticket.project_id})`
     : '所屬專案：(無)';
   $('btn-jump-to-site').classList.toggle('hidden', !ticket.project_id);
+  $('btn-jump-to-project').classList.toggle('hidden', !ticket.project_id);
 
   const savedType = await call(window.api.ticketMeta.getType(ticket.id));
   $('ticket-type-select').value = savedType || defaultLocalTypeFor(ticket);
@@ -2955,6 +3009,11 @@ async function submitReply() {
 // ---------------- 綁定事件 ----------------
 
 window.api.notification.onShow(showAppNotification);
+// 獨立工單視窗按「查看案場／專案」，經main process轉過來
+window.api.window.onJump(({ target, projectId }) => {
+  if (target === 'site') jumpToInstallListByProject(projectId);
+  else if (target === 'project') jumpToProject(projectId);
+});
 $('btn-close-app-notification').addEventListener('click', () => $('app-notification').classList.add('hidden'));
 $('btn-settings').addEventListener('click', () => $('settings-panel').classList.toggle('hidden'));
 $('btn-refresh').addEventListener('click', refreshAll);
@@ -2965,7 +3024,7 @@ $('btn-open-install-search').addEventListener('click', openInstallPanel);
 $('btn-install-back').addEventListener('click', closeInstallPanel);
 $('btn-install-detail-close').addEventListener('click', closeInstallDetail);
 $('btn-install-tickets-more').addEventListener('click', loadMoreInstallTickets);
-$('btn-open-project-search').addEventListener('click', openProjectPanel);
+$('btn-open-project-search').addEventListener('click', () => openProjectPanel());
 $('btn-project-back').addEventListener('click', closeProjectPanel);
 $('btn-project-tickets-close').addEventListener('click', closeProjectTickets);
 $('project-tickets-status-bar').addEventListener('click', (e) => {
@@ -2991,6 +3050,18 @@ $('btn-ts-copy-id').addEventListener('click', () => {
 $('btn-ts-jump-to-site').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
   jumpToInstallListByProject(state.currentTicketSearchDetail.project_id);
+});
+$('btn-ts-jump-to-project').addEventListener('click', () => {
+  if (!state.currentTicketSearchDetail) return;
+  jumpToProject(state.currentTicketSearchDetail.project_id);
+});
+$('btn-jump-to-project').addEventListener('click', () => {
+  if (!state.currentTicket) return;
+  jumpToProject(state.currentTicket.project_id);
+});
+$('btn-install-jump-to-project').addEventListener('click', () => {
+  if (!state.currentInstallList) return;
+  jumpToProject(state.currentInstallList.project_id);
 });
 $('btn-ts-transfer').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
@@ -3184,6 +3255,7 @@ function tickAutoRefresh() {
   if (whoamiResult) {
     state.currentUserId = whoamiResult.id;
     state.canTransferTicket = !!whoamiResult.can_transfer_ticket;
+    versionPermission.canAdd = !!whoamiResult.can_add_version;
   }
   await Promise.all([refreshAll(), loadTodos(), loadEngineers()]);
 })();

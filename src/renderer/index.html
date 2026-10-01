@@ -159,6 +159,7 @@
           <p><span class="ticket-id" id="detail-id"></span> <button id="btn-copy-id">複製工單號</button> <button id="btn-view-ticket-full" title="在右側顯示這張工單的完整資訊(欄位、描述、附件、全部回覆)">查看工單詳情</button></p>
           <p id="detail-project"></p>
           <button id="btn-jump-to-site" class="hidden">查看這個專案的案場/裝機單資訊</button>
+          <button id="btn-jump-to-project" class="hidden">查看專案</button>
           <label>這個專案的本地Git路徑(存在settings，同一個專案的其他工單共用；也可以到「設定」的「專案Git路徑」統一管理)
             <input type="text" id="detail-project-path" placeholder="例如 D:\www56\nsst" />
             <button id="btn-save-project-path">儲存</button>
@@ -413,6 +414,7 @@
               <button id="btn-install-detail-close" type="button">✕ 關閉詳情，回到列表</button>
             </div>
             <h3 id="install-detail-name"></h3>
+            <button id="btn-install-jump-to-project" type="button" class="hidden">查看專案</button>
             <div id="install-detail-basic" class="info-grid"></div>
             <h4>連線設定</h4>
             <div id="install-detail-connection"></div>
@@ -552,7 +554,7 @@
               <button id="btn-ticket-search-detail-close" type="button">✕ 關閉詳情，回到列表</button>
             </div>
             <h2 id="ticket-search-detail-title"></h2>
-            <p><span class="ticket-id" id="ticket-search-detail-id"></span> <button id="btn-ts-copy-id" type="button">複製工單號</button> <button id="btn-ts-jump-to-site" type="button" class="hidden">查看這個專案的案場／裝機單資訊</button> <button id="btn-ts-transfer" type="button" class="hidden" title="把工單改指派給別的工程師">轉單</button></p>
+            <p><span class="ticket-id" id="ticket-search-detail-id"></span> <button id="btn-ts-copy-id" type="button">複製工單號</button> <button id="btn-ts-jump-to-site" type="button" class="hidden">查看這個專案的案場／裝機單資訊</button> <button id="btn-ts-jump-to-project" type="button" class="hidden">查看專案</button> <button id="btn-ts-transfer" type="button" class="hidden" title="把工單改指派給別的工程師">轉單</button></p>
             <p id="ticket-search-not-own" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;margin:0 0 8px;">
               這張工單不是指派給你的，僅供查詢檢視
             </p>
@@ -635,8 +637,9 @@
           <button id="btn-mail-modal-close">✕</button>
         </div>
         <p id="mail-modal-meta" class="meta"></p>
+        <div id="mail-modal-attachments" class="hidden"></div>
         <div id="mail-modal-body-wrap">
-          <iframe id="mail-modal-frame" sandbox=""></iframe>
+          <iframe id="mail-modal-frame" sandbox="allow-popups"></iframe>
         </div>
       </div>
     </div>

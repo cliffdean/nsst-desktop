@@ -73,12 +73,21 @@ async function getMessage(uid) {
       await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }).catch((err) => {
         console.warn('標記已讀失敗：', err.message);
       });
+      const attachments = pickAttachments(parsed);
+      // 附件內容留在main process，存檔時直接拿，不用整封信再下載一次；前端只拿檔名/大小
+      lastAttachments = { uid: Number(uid), list: attachments };
       return {
         subject: parsed.subject || '(無主旨)',
         from: parsed.from ? parsed.from.text : '(未知寄件人)',
         date: parsed.date || null,
         html: parsed.html || null, // 前端會用sandbox iframe呈現，不會直接insert到頁面裡執行script
         text: parsed.text || '',
+        attachments: attachments.map((a, index) => ({
+          index,
+          filename: a.filename,
+          contentType: a.contentType,
+          size: a.size,
+        })),
       };
     } finally {
       lock.release();
@@ -88,4 +97,41 @@ async function getMessage(uid) {
   }
 }
 
-module.exports = { listRecent, getMessage };
+// 內文裡引用的內嵌圖片(cid)mailparser已經轉成data URI顯示在內文了，不再列成附件
+function pickAttachments(parsed) {
+  return (parsed.attachments || [])
+    .filter((a) => !(parsed.html && a.related))
+    .map((a, i) => ({
+      filename: a.filename || `附件${i + 1}`,
+      contentType: a.contentType || 'application/octet-stream',
+      size: a.size || (a.content ? a.content.length : 0),
+      content: a.content,
+    }));
+}
+
+let lastAttachments = { uid: null, list: [] };
+
+// 取得某封信的某個附件內容；通常就是剛點開的那封，快取沒有時才重新抓信
+async function getAttachment(uid, index) {
+  if (lastAttachments.uid !== Number(uid)) {
+    const client = buildClient();
+    await client.connect();
+    try {
+      const lock = await client.getMailboxLock('INBOX');
+      try {
+        const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+        if (!msg || !msg.source) throw new Error('找不到這封信，可能已被刪除或移動');
+        lastAttachments = { uid: Number(uid), list: pickAttachments(await simpleParser(msg.source)) };
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await client.logout().catch(() => {});
+    }
+  }
+  const att = lastAttachments.list[index];
+  if (!att) throw new Error('找不到這個附件');
+  return att;
+}
+
+module.exports = { listRecent, getMessage, getAttachment };

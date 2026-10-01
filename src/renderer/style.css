@@ -351,6 +351,15 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .image-preview-wrap.dragging img,
 .image-preview-wrap.dragging video { transition: none; }
 #mail-modal-body-wrap { flex: 1; margin-top: 8px; }
+#mail-modal-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#mail-modal-attachments.hidden { display: none; }
+.mail-attachment { padding: 4px 10px; border: 1px solid #e2e5ea; border-radius: 4px; background: #f7f8fa; font-size: 12px; cursor: pointer; }
+.mail-attachment:hover { background: #eef1f5; }
+.mail-attachment .size { color: #888; margin-left: 4px; }
+.version-editor { display: inline-flex; align-items: center; gap: 4px; }
+.btn-version-edit, .btn-version-cancel { padding: 0 6px; font-size: 12px; line-height: 1.6; }
+.btn-version-cancel.hidden { display: none; }
+.version-select, .version-new-input { font-size: 12px; max-width: 220px; }
 #mail-modal-frame { width: 100%; height: 55vh; border: 1px solid #e2e5ea; border-radius: 4px; background: #fff; }
 .meta { color: #888; font-size: 12px; }
 

@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, clipboard, shell, screen } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 const { settingsStore, ticketMetaStore, todoStore, projectStarStore } = require('./store');
 const eipApi = require('./eipApi');
@@ -215,6 +216,18 @@ app.on('web-contents-created', (_event, contents) => {
     if (!template.length) return;
     Menu.buildFromTemplate(template).popup({ window: BrowserWindow.fromWebContents(contents) || undefined });
   });
+
+  // 信件iframe裡的連結(會議連結等)一律交給系統瀏覽器開，不在App裡開新視窗或在iframe內跳轉
+  const isExternalUrl = (url) => /^(https?|mailto):/i.test(url);
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isExternalUrl(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  contents.on('will-frame-navigate', (e) => {
+    if (e.isMainFrame || !isExternalUrl(e.url)) return;
+    e.preventDefault();
+    shell.openExternal(e.url);
+  });
 });
 
 app.whenReady().then(() => {
@@ -365,6 +378,8 @@ handle('eip:get-ticket-search-options', () => eipApi.getTicketSearchOptions());
 handle('eip:get-ticket', (id) => eipApi.getTicket(id));
 handle('eip:reply-ticket', (id, payload) => eipApi.replyTicket(id, payload));
 handle('eip:transfer-ticket', (id, info, chgUserId) => eipApi.transferTicket(id, info, chgUserId));
+handle('eip:update-ticket-version', (id, version) => eipApi.updateTicketVersion(id, version));
+handle('eip:add-ticket-version', (name) => eipApi.addTicketVersion(name));
 handle('eip:upload-file', (filePath) => eipApi.uploadFile(filePath));
 handle('eip:attach-file', (id, fileId) => eipApi.attachFile(id, fileId));
 
@@ -415,6 +430,19 @@ handle('llm:generate-batch-reply', (params) => llmService.generateBatchReply(par
 
 handle('mail:list-recent', (limit) => mailService.listRecent(limit));
 handle('mail:get-message', (uid) => mailService.getMessage(uid));
+handle('mail:save-attachment', async (uid, index) => {
+  const { dialog } = require('electron');
+  const att = await mailService.getAttachment(uid, index);
+  // 檔名來自寄件者，去掉路徑與Windows不允許的字元，避免存到非預期的位置
+  const safeName = path.basename(att.filename).replace(/[\\/:*?"<>|]/g, '_');
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: path.join(app.getPath('downloads'), safeName),
+  });
+  if (result.canceled || !result.filePath) return null;
+  await fs.promises.writeFile(result.filePath, att.content);
+  shell.showItemInFolder(result.filePath);
+  return result.filePath;
+});
 
 handle('calendar:list-range', (startIso, endIso) => calendarService.listEventsInRange(startIso, endIso));
 handle('calendar:create-event', (params) => calendarService.createEvent(params));
@@ -431,6 +459,15 @@ handle('clipboard:copy', (text) => {
 handle('shell:open-external', (url) => shell.openExternal(url));
 
 handle('window:open-ticket', (ticketId) => openTicketWindow(ticketId));
+// 獨立工單視窗按「查看案場/專案」：把主視窗叫到前面，交給主視窗切到裝機單/專案查詢，target: 'site' | 'project'
+handle('window:jump-in-main', (target, projectId) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('window:jump', { target, projectId });
+  return true;
+});
 
 handle('dialog:pick-file', async () => {
   const { dialog } = require('electron');
