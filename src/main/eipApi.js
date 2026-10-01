@@ -115,6 +115,12 @@ async function replyTicket(id, payload) {
   return res.data.data;
 }
 
+// 轉單(僅限「專管」身份)：把工單改指派給其他工程師，不限自己負責的工單，但一定要附一段說明文字
+async function transferTicket(id, info, chgUserId) {
+  const res = await client().post(`/tickets/${id}/transfer`, { info, chg_user_id: chgUserId });
+  return res.data.data;
+}
+
 async function attachFile(id, fileId) {
   const res = await client().post(`/tickets/${id}/attach`, { fileid: fileId });
   return res.data.data;
@@ -158,6 +164,7 @@ module.exports = {
   getTicketSearchOptions,
   getTicket,
   replyTicket,
+  transferTicket,
   attachFile,
   uploadFile,
   searchInstallLists,

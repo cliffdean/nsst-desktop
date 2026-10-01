@@ -1,6 +1,7 @@
 const state = {
   settings: null,
   currentUserId: null,
+  canTransferTicket: false, // 身份是「專管」才會是true，決定要不要顯示轉單按鈕
   tickets: [],
   currentTicket: null,
   currentTicketSearchDetail: null, // 右側工單查詢目前顯示的那張工單，給複製工單號／跳去裝機單查詢用
@@ -1515,7 +1516,9 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('ticket-search-detail-title').textContent = ticket.summary || '(無摘要)';
   $('ticket-search-detail-id').textContent = formatTicketNo(ticket.id);
   $('btn-ts-jump-to-site').classList.toggle('hidden', !ticket.project_id);
-  state.currentTicketSearchDetail = ticket; // 給複製工單號／跳去裝機單查詢的按鈕用
+  // 轉單僅限「專管」身份，且只有「已指派」狀態的工單可以轉(跟後端transfer()的限制一致)
+  $('btn-ts-transfer').classList.toggle('hidden', !state.canTransferTicket || ticket.status !== 1);
+  state.currentTicketSearchDetail = ticket; // 給複製工單號／跳去裝機單查詢／轉單的按鈕用
 
   $('ticket-search-detail-basic').innerHTML = ticketFullInfoRows(ticket);
 
@@ -1532,6 +1535,56 @@ async function openTicketSearchDetail(id, syncList = false) {
     : '<span style="color:#888;font-size:12px;">目前沒有回覆記錄</span>';
 
   bindAttachmentLinks($('ticket-search-detail'));
+}
+
+// ---------------- 轉單(僅限「專管」身份，可把工單改指派給別的工程師，不限自己負責的工單) ----------------
+
+let transferTicketId = null;
+
+async function openTransferTicketModal(ticketId) {
+  transferTicketId = ticketId;
+  $('transfer-ticket-info').value = '';
+  $('transfer-ticket-message').textContent = '';
+  $('transfer-ticket-target').innerHTML = '<option value="">讀取工程師清單中...</option>';
+  $('transfer-ticket-backdrop').classList.remove('hidden');
+
+  const engineers = state.engineers && state.engineers.length ? state.engineers : await call(window.api.eip.listEngineers());
+  const list = (engineers || []).filter((e) => e.is_engineering);
+  $('transfer-ticket-target').innerHTML = list.length
+    ? list.map((e) => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('')
+    : '<option value="">沒有可轉單的工程師</option>';
+}
+
+function closeTransferTicketModal() {
+  $('transfer-ticket-backdrop').classList.add('hidden');
+  transferTicketId = null;
+}
+
+async function submitTransferTicket() {
+  if (!transferTicketId) return;
+  const info = $('transfer-ticket-info').value.trim();
+  const chgUserId = $('transfer-ticket-target').value;
+  if (!chgUserId) {
+    $('transfer-ticket-message').textContent = '請選擇轉單對象';
+    return;
+  }
+  if (!info) {
+    $('transfer-ticket-message').textContent = '請填寫轉單說明';
+    return;
+  }
+
+  const btn = $('btn-transfer-ticket-submit');
+  btn.disabled = true;
+  $('transfer-ticket-message').textContent = '處理中...';
+  const ticketId = transferTicketId;
+  const result = await call(window.api.eip.transferTicket(ticketId, info, chgUserId), (err) => {
+    $('transfer-ticket-message').textContent = '轉單失敗：' + err;
+  });
+  btn.disabled = false;
+  if (!result) return;
+
+  closeTransferTicketModal();
+  openTicketSearchDetail(ticketId); // 重新整理詳情，顯示轉單後的最新狀態/負責人員/回覆紀錄
 }
 
 async function refreshMail() {
@@ -2939,6 +2992,15 @@ $('btn-ts-jump-to-site').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
   jumpToInstallListByProject(state.currentTicketSearchDetail.project_id);
 });
+$('btn-ts-transfer').addEventListener('click', () => {
+  if (!state.currentTicketSearchDetail) return;
+  openTransferTicketModal(state.currentTicketSearchDetail.id);
+});
+$('btn-transfer-ticket-close').addEventListener('click', closeTransferTicketModal);
+$('btn-transfer-ticket-submit').addEventListener('click', submitTransferTicket);
+$('transfer-ticket-backdrop').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeTransferTicketModal();
+});
 $('ticket-search-query').addEventListener('input', () => {
   clearTimeout(ticketSearchTimer);
   const q = $('ticket-search-query').value;
@@ -3119,6 +3181,9 @@ function tickAutoRefresh() {
   setInterval(tickAutoRefresh, 1000);
   await loadSettingsIntoForm();
   const whoamiResult = await call(window.api.eip.whoami());
-  if (whoamiResult) state.currentUserId = whoamiResult.id;
+  if (whoamiResult) {
+    state.currentUserId = whoamiResult.id;
+    state.canTransferTicket = !!whoamiResult.can_transfer_ticket;
+  }
   await Promise.all([refreshAll(), loadTodos(), loadEngineers()]);
 })();

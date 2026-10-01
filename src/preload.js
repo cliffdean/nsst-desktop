@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('api', {
     getTicketSearchOptions: invoke('eip:get-ticket-search-options'),
     getTicket: invoke('eip:get-ticket'),
     replyTicket: invoke('eip:reply-ticket'),
+    transferTicket: invoke('eip:transfer-ticket'),
     uploadFile: invoke('eip:upload-file'),
     attachFile: invoke('eip:attach-file'),
   },

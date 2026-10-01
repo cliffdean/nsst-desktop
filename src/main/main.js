@@ -364,6 +364,7 @@ handle('eip:advanced-search-tickets', (filters) => eipApi.advancedSearchTickets(
 handle('eip:get-ticket-search-options', () => eipApi.getTicketSearchOptions());
 handle('eip:get-ticket', (id) => eipApi.getTicket(id));
 handle('eip:reply-ticket', (id, payload) => eipApi.replyTicket(id, payload));
+handle('eip:transfer-ticket', (id, info, chgUserId) => eipApi.transferTicket(id, info, chgUserId));
 handle('eip:upload-file', (filePath) => eipApi.uploadFile(filePath));
 handle('eip:attach-file', (id, fileId) => eipApi.attachFile(id, fileId));
 
