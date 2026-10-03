@@ -332,6 +332,7 @@ function bindVersionEditor(container, ticket, onSaved) {
 
 let transferTicketIds = [];
 let transferDoneCallback = null;
+let transferAssignees = {}; // { 工單id: 目前負責人id }，轉給「本來就是負責人」的人時要擋下來
 let transferOriginalEndTime = ''; // 開窗時預填的結束日期，沒被改動就不送，避免沒必要地改到工單
 let transferEngineersPromise = null;
 
@@ -369,9 +370,11 @@ function toDatetimeLocal(value) {
 
 // ticketIds：單一id或id陣列(左側批次轉單)；onDone(成功的id，傳入陣列就回陣列)：給呼叫端重新整理畫面用
 // currentEndTime：單張轉單時帶入該工單目前的結束日期當預設值；批次不帶(每張不同)，留空=不改
-async function openTransferTicketModal(ticketIds, onDone, currentEndTime) {
+// assignees：{ 工單id: 目前負責人id }(選填)，用來檢查「本來就在A身上又轉給A」
+async function openTransferTicketModal(ticketIds, onDone, currentEndTime, assignees) {
   const isBatch = Array.isArray(ticketIds);
   transferTicketIds = isBatch ? ticketIds : [ticketIds];
+  transferAssignees = assignees || {};
   transferDoneCallback = onDone ? (done) => onDone(isBatch ? done : done[0]) : null;
   $('transfer-ticket-info').value = '';
   transferOriginalEndTime = isBatch ? '' : toDatetimeLocal(currentEndTime);
@@ -403,6 +406,20 @@ async function submitTransferTicket() {
   if (!info) {
     $('transfer-ticket-message').textContent = '請填寫轉單說明';
     return;
+  }
+
+  // 本來就是這位工程師負責的單不需要再轉：全部都是就擋下來；只有部分是就問要不要略過這幾張
+  const already = transferTicketIds.filter((id) => transferAssignees[String(id)] != null && String(transferAssignees[String(id)]) === String(chgUserId));
+  if (already.length) {
+    const who = $('transfer-ticket-target').selectedOptions[0].textContent;
+    const list = already.map((id) => formatTicketNo(id)).join('、');
+    if (already.length === transferTicketIds.length) {
+      $('transfer-ticket-message').textContent = `${list} 本來就是 ${who} 負責的，不需要再轉單給同一個人，請改選其他工程師`;
+      return;
+    }
+    if (!confirm(`${already.length} 張本來就是 ${who} 負責的，不需要再轉：\n${list}\n\n略過這幾張，只轉其餘 ${transferTicketIds.length - already.length} 張嗎？`)) return;
+    const skip = new Set(already.map(String));
+    transferTicketIds = transferTicketIds.filter((id) => !skip.has(String(id)));
   }
 
   const endTimeValue = $('transfer-ticket-end-time').value;

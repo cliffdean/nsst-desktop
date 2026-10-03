@@ -52,7 +52,7 @@ $('btn-tw-reload').addEventListener('click', loadTicket);
 $('btn-tw-jump-to-site').addEventListener('click', () => call(window.api.window.jumpInMain('site', currentProjectId)));
 $('btn-tw-jump-to-project').addEventListener('click', () => call(window.api.window.jumpInMain('project', currentProjectId)));
 // 轉單成功後重新讀取這張工單，顯示新的負責人員/狀態/轉單說明回覆
-$('btn-tw-transfer').addEventListener('click', () => openTransferTicketModal(ticketId, loadTicket, currentTicket && currentTicket.end_time));
+$('btn-tw-transfer').addEventListener('click', () => openTransferTicketModal(ticketId, loadTicket, currentTicket && currentTicket.end_time, currentTicket ? { [ticketId]: currentTicket.p_user_id } : undefined));
 bindTransferTicketModal();
 $('btn-tw-reply').addEventListener('click', () => call(window.api.window.jumpInMain('reply', ticketId)));
 // 刪除後重新讀取，畫面會顯示「已刪除」狀態與刪除原因回覆

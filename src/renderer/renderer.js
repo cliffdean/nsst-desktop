@@ -11,7 +11,7 @@ const state = {
   tickInterval: null,
   selectedIds: new Set(), // 批次提交用的多選狀態
   searchQuery: '',
-  ticketRange: 'week', // 左側清單的時間範圍：'week'=本週五以前(後端預設)，'next'=下週五以前(週六日派單時用)
+  ticketRange: 'week', // 左側清單的時間範圍：'week'=本週五以前(後端預設)，'next'=下週五以前(週六日派單時用)，'all'=全部未結案(不限開始日期)
   projectView: null, // 專案工單檢視模式：{ project, filters, label }；左側清單暫時改列某專案的工單(給專管分配用)
   activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單
   viewUserId: null, // 左側清單目前在看哪位工程師的工單；null=自己(每次開App都從自己開始，不記憶)
@@ -1082,11 +1082,15 @@ async function sendProjectTicketsToLeft() {
   const project = projectPanel.projects.find((p) => String(p.id) === String(sel.projectId));
   if (!project) return;
   const stageInfo = sel.stage != null ? project.stages.find((s) => s.index === sel.stage) : null;
+  const alreadyInView = !!state.projectView;
   state.projectView = {
     project,
     filters: currentProjectTicketFilters(project, sel),
     label: `${project.name}　${stageInfo ? stageInfo.name : '全部階段'}`,
+    engineerId: null, // 工程師選單的篩選：null=全部；選了人就只看這個人的單(分配後的單會從原本的人身上消失)
+    prevSelect: alreadyInView ? state.projectView.prevSelect : $('engineer-select').value, // 離開時要選回去的人
   };
+  enterProjectViewEngineerSelect();
   if (state.currentTicket) backToList();
   state.selectedIds.clear();
   state.searchQuery = '';
@@ -1113,10 +1117,51 @@ async function loadProjectViewTickets() {
   }
   if (state.projectView !== view) return;
   state.tickets = items;
+  updateProjectViewEngineerCounts();
   const alive = new Set(items.map((t) => String(t.id)));
   [...state.selectedIds].forEach((id) => { if (!alive.has(id)) state.selectedIds.delete(id); });
   renderTicketList();
   updateBatchBar();
+}
+
+// 工程師選單在專案檢視中的樣子：最前面多一個「全部」，每個人後面標這個專案目前有幾張單
+function enterProjectViewEngineerSelect() {
+  const sel = $('engineer-select');
+  if (!sel.querySelector('option[data-all]')) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.dataset.all = '1';
+    sel.insertBefore(opt, sel.firstChild);
+  }
+  sel.value = '';
+  updateProjectViewEngineerCounts();
+}
+
+function updateProjectViewEngineerCounts() {
+  const view = state.projectView;
+  if (!view) return;
+  const counts = {};
+  state.tickets.forEach((t) => { counts[String(t.p_user_id)] = (counts[String(t.p_user_id)] || 0) + 1; });
+  const sel = $('engineer-select');
+  sel.querySelectorAll('option').forEach((o) => {
+    if (o.dataset.base === undefined) o.dataset.base = o.textContent;
+    o.textContent = o.dataset.all ? `全部(${state.tickets.length})` : `${o.dataset.base}(${counts[o.value] || 0})`;
+  });
+  sel.value = view.engineerId == null ? '' : String(view.engineerId);
+}
+
+// 離開專案檢視：拿掉「全部」與張數，選回原本看的人
+function leaveProjectViewEngineerSelect(prevValue) {
+  const sel = $('engineer-select');
+  const all = sel.querySelector('option[data-all]');
+  if (all) all.remove();
+  sel.querySelectorAll('option').forEach((o) => {
+    if (o.dataset.base !== undefined) {
+      o.textContent = o.dataset.base;
+      delete o.dataset.base;
+    }
+  });
+  if (prevValue != null && prevValue !== '') sel.value = prevValue;
 }
 
 function updateProjectViewUi() {
@@ -1130,6 +1175,7 @@ function updateProjectViewUi() {
 
 function exitProjectView() {
   if (!state.projectView) return;
+  leaveProjectViewEngineerSelect(state.projectView.prevSelect);
   state.projectView = null;
   state.tickets = [];
   state.selectedIds.clear();
@@ -1309,6 +1355,7 @@ function ticketSearchCardHtml(t) {
           ${metaItem('系統功能版本', t.version_text)}
         </div>
         <div class="ts-card-meta">
+          ${metaItem('建單', t.created_at ? String(t.created_at).slice(0, 10) : '')}
           ${metaItem('開始', t.start_time)}
           ${metaItem('結束', t.end_time)}
           ${t.progress_text ? `<span class="ts-progress ${progressClass(t.progress_text)}">${escapeHtml(t.progress_text)}</span>` : ''}
@@ -2107,7 +2154,9 @@ function timerControlsHtml(ticket) {
 }
 
 function filteredTickets() {
-  const byTab = state.projectView ? state.tickets : state.tickets.filter((t) => (state.activeTab === 'qc' ? t.is_qc_stage : !t.is_qc_stage));
+  const byTab = state.projectView
+    ? (state.projectView.engineerId == null ? state.tickets : state.tickets.filter((t) => String(t.p_user_id) === String(state.projectView.engineerId)))
+    : state.tickets.filter((t) => (state.activeTab === 'qc' ? t.is_qc_stage : !t.is_qc_stage));
   const q = state.searchQuery.trim().toLowerCase();
   const filtered = !q ? byTab : byTab.filter((t) => {
     return (
@@ -2175,7 +2224,7 @@ function renderTicketList() {
       ? '這個專案在目前的篩選下沒有工單'
       : state.activeTab === 'qc'
       ? '目前沒有品保審核中的工單'
-      : state.ticketRange === 'next' ? '目前沒有下週五之前需要處理的工單' : '目前沒有本週五之前需要處理的工單';
+      : state.ticketRange === 'next' ? '目前沒有下週五之前需要處理的工單' : state.ticketRange === 'all' ? '目前沒有未結案的工單' : '目前沒有本週五之前需要處理的工單';
     container.innerHTML = `<p>${emptyText}。</p>`;
     return;
   }
@@ -2195,7 +2244,7 @@ function renderTicketList() {
           <span>#${t.id} ${t.project_name || t.name || ''}</span>${statusBadge(t)}
         </div>
         <div class="summary">${t.summary || ''}</div>
-        <div class="meta">${state.projectView && t.p_user_name ? `負責：${escapeHtml(t.p_user_name)}　` : ''}開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}${t.version_text ? `　版本：${escapeHtml(t.version_text)}` : ''}</div>
+        <div class="meta">${state.projectView && t.p_user_name ? `負責：${escapeHtml(t.p_user_name)}　` : ''}${t.created_at ? `建單：${escapeHtml(String(t.created_at).slice(0, 10))}　` : ''}開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}${t.version_text ? `　版本：${escapeHtml(t.version_text)}` : ''}</div>
         ${readonly && !t.pending_reply ? '' : timerControlsHtml(t)}
         <div class="card-actions-row">
           <button class="btn-card-view-full" data-id="${t.id}" title="在右側打開這張工單的完整詳情">查看工單</button>
@@ -2685,8 +2734,13 @@ async function loadEngineers() {
 }
 
 function switchEngineer() {
-  state.projectView = null;
-  updateProjectViewUi();
+  if (state.projectView) { // 專案工單檢視中：選工程師=只看這個人的單，不是切換成看他的待辦清單
+    state.projectView.engineerId = $('engineer-select').value === '' ? null : Number($('engineer-select').value);
+    state.selectedIds.clear(); // 換了篩選，之前勾選(可能已看不到)的先清掉，避免誤轉看不見的單
+    renderTicketList();
+    updateBatchBar();
+    return;
+  }
   const id = Number($('engineer-select').value);
   state.viewUserId = id && id !== Number(state.currentUserId) ? id : null;
   const viewing = isViewingOtherEngineer();
@@ -2713,7 +2767,7 @@ function nextFridayDateStr() {
 
 function updateRangeUi() {
   document.querySelectorAll('#ticket-range .range-btn').forEach((el) => el.classList.toggle('active', el.dataset.range === state.ticketRange));
-  $('ticket-range-date').textContent = state.ticketRange === 'next' ? `(開始時間 ≤ ${nextFridayDateStr()})` : '';
+  $('ticket-range-date').textContent = state.ticketRange === 'next' ? `(開始時間 ≤ ${nextFridayDateStr()})` : state.ticketRange === 'all' ? '(不限開始日期)' : '';
   $('ticket-range').classList.toggle('hidden', !!state.projectView);
 }
 
@@ -2736,7 +2790,7 @@ async function refreshTicketList() {
   const viewUserId = state.viewUserId;
   const assigneeId = viewUserId || state.currentUserId;
   const [tickets, timers, finishedRes] = await Promise.all([
-    call(window.api.eip.listTickets(state.ticketRange === 'next' ? nextFridayDateStr() : null, viewUserId), (err) => {
+    call(window.api.eip.listTickets(state.ticketRange === 'next' ? nextFridayDateStr() : state.ticketRange === 'all' ? '2099-12-31' : null, viewUserId), (err) => {
       if (state.viewUserId === viewUserId) $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
     }),
     call(window.api.timer.getAll()),
@@ -3392,7 +3446,8 @@ $('btn-install-jump-to-project').addEventListener('click', () => {
 $('btn-ts-transfer').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
   // 轉單後重新整理詳情，顯示轉單後的最新狀態/負責人員/回覆紀錄
-  openTransferTicketModal(state.currentTicketSearchDetail.id, (ticketId) => openTicketSearchDetail(ticketId), state.currentTicketSearchDetail.end_time);
+  const d = state.currentTicketSearchDetail;
+  openTransferTicketModal(d.id, (ticketId) => openTicketSearchDetail(ticketId), d.end_time, { [d.id]: d.p_user_id });
 });
 bindTransferTicketModal();
 $('btn-ts-reply').addEventListener('click', () => {
@@ -3531,8 +3586,10 @@ $('btn-batch-finish').addEventListener('click', () => openBatchPanel('finish'));
 $('btn-batch-clear').addEventListener('click', clearSelection);
 $('btn-batch-select-all').addEventListener('click', selectAllVisibleTickets);
 $('btn-batch-transfer').addEventListener('click', () => {
-  const ids = selectedTickets().map((t) => t.id);
-  if (ids.length) openTransferTicketModal(ids, afterBatchTicketAction);
+  const picked = selectedTickets();
+  const ids = picked.map((t) => t.id);
+  const assignees = Object.fromEntries(picked.map((t) => [String(t.id), t.p_user_id]));
+  if (ids.length) openTransferTicketModal(ids, afterBatchTicketAction, undefined, assignees);
 });
 $('btn-batch-delete').addEventListener('click', () => {
   const tickets = selectedTickets();
