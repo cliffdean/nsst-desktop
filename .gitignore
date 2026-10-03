@@ -35,3 +35,13 @@ $RECYCLE.BIN/
 
 # Claude Code 本機設定
 .claude/settings.local.json
+
+# 電子紙出廠固件備份(32MB，內含Wi-Fi密碼等裝置資料，不可提交)
+firmware/backup/
+
+# 電子紙固件：WiFi帳密、字型檔(由 firmware/fonts/make_fonts.py 產生)
+firmware/**/secrets.h
+firmware/fonts/*.ttf
+
+# Playwright MCP 暫存
+.playwright-mcp/

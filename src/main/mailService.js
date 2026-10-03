@@ -2,8 +2,9 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const { settingsStore } = require('./store');
 
-function buildClient() {
-  const mail = settingsStore.get('mail');
+// override：測試時用畫面上還沒儲存的信箱設定，不寫進設定檔
+function buildClient(override) {
+  const mail = { ...settingsStore.get('mail'), ...(override || {}) };
   if (!mail.username || !mail.password || !mail.imapHost) {
     throw new Error('尚未設定信箱帳號/密碼/IMAP主機，請先到設定裡填寫');
   }
@@ -18,9 +19,9 @@ function buildClient() {
 }
 
 // 抓收件匣最新N封信(含未讀狀態)，只拿信封資訊，不下載內文，避免大附件拖慢速度
-async function listRecent(limit) {
+async function listRecent(limit, override) {
   const max = limit || 20;
-  const client = buildClient();
+  const client = buildClient(override);
   await client.connect();
 
   try {

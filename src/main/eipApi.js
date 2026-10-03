@@ -1,9 +1,11 @@
 const axios = require('axios');
 const { settingsStore } = require('./store');
 
-function client() {
-  const baseURL = settingsStore.get('eipBaseUrl');
-  const apiToken = settingsStore.get('apiToken');
+// override：測試/登入時用「畫面上還沒儲存的值」{ baseUrl, token }，不寫進設定檔；沒給就用已儲存的設定
+function client(override) {
+  const o = override || {};
+  const baseURL = o.baseUrl || settingsStore.get('eipBaseUrl');
+  const apiToken = o.token !== undefined ? o.token : settingsStore.get('apiToken');
   return axios.create({
     baseURL,
     timeout: 15000,
@@ -13,8 +15,8 @@ function client() {
   });
 }
 
-async function whoami() {
-  const res = await client().get('/whoami');
+async function whoami(override) {
+  const res = await client(override).get('/whoami');
   return res.data.data;
 }
 
@@ -25,10 +27,12 @@ async function listEngineers() {
 }
 
 // 專案清單(含流程進度各階段的狀態、工程部/財務部卡片、四期收款)；status是逗號分隔的專案狀態代碼，不帶=全部
-async function listProjects(q, status) {
+// status含1(進行中)時後端也會帶出已完成但仍有未完成工單的專案；dept: engineering(含退回工程部)|finance，不帶=全部
+async function listProjects(q, status, dept) {
   const params = {};
   if (q) params.q = q;
   if (status) params.status = status;
+  if (dept) params.dept = dept;
   const res = await client().get('/projects', { params });
   return res.data.data;
 }
@@ -52,8 +56,8 @@ async function projectPaymentPercentSave(projectId, percents) {
 }
 
 // 用EIP帳號密碼直接換一組API token，不用再手動跑 artisan api-token:generate
-async function login(username, password) {
-  const res = await client().post('/login', { username, password, label: '桌面工具-自助登入' });
+async function login(username, password, override) {
+  const res = await client(override).post('/login', { username, password, label: '桌面工具-自助登入' });
   return res.data.data;
 }
 
@@ -116,8 +120,28 @@ async function replyTicket(id, payload) {
 }
 
 // 轉單(僅限「專管」身份)：把工單改指派給其他工程師，不限自己負責的工單，但一定要附一段說明文字
-async function transferTicket(id, info, chgUserId) {
-  const res = await client().post(`/tickets/${id}/transfer`, { info, chg_user_id: chgUserId });
+// 個人資料同步(待辦/加星/工單類型標記/回覆範本/計時)：回傳{ data: {key: value}, updated_at: {key: time} }
+async function getDesktopData() {
+  const res = await client().get('/desktop-data');
+  return { data: res.data.data || {}, updatedAt: res.data.updated_at || {} };
+}
+
+async function saveDesktopData(key, value) {
+  const res = await client().post(`/desktop-data/${key}`, { value });
+  return res.data.data;
+}
+
+// 刪除工單(僅限「專管」)：後端只把狀態改成已刪除並記一則回覆，reason選填
+async function deleteTicket(id, reason) {
+  const res = await client().post(`/tickets/${id}/delete`, { reason });
+  return res.data.data;
+}
+
+// endTime選填(YYYY-MM-DDTHH:MM)：轉單時一併調整任務結束日期，不帶=不改
+async function transferTicket(id, info, chgUserId, endTime) {
+  const body = { info, chg_user_id: chgUserId };
+  if (endTime) body.end_time = endTime;
+  const res = await client().post(`/tickets/${id}/transfer`, body);
   return res.data.data;
 }
 
@@ -177,6 +201,9 @@ module.exports = {
   getTicket,
   replyTicket,
   transferTicket,
+  deleteTicket,
+  getDesktopData,
+  saveDesktopData,
   updateTicketVersion,
   addTicketVersion,
   attachFile,

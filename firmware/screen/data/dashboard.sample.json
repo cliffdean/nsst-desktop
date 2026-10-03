@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "title": "工單看板",
+  "updated_at": "10/03 14:30",
+  "totals": { "todo": 31, "review": 12, "overdue": 4 },
+  "engineers": [
+    { "name": "王大明", "todo": 8, "review": 2, "overdue": 2 },
+    { "name": "林志豪", "todo": 6, "review": 3, "overdue": 1 },
+    { "name": "陳怡君", "todo": 5, "review": 1, "overdue": 0 },
+    { "name": "張家瑋", "todo": 4, "review": 4, "overdue": 1 },
+    { "name": "黃柏翰", "todo": 3, "review": 0, "overdue": 0 },
+    { "name": "李宗憲", "todo": 3, "review": 1, "overdue": 0 },
+    { "name": "吳佩珊", "todo": 2, "review": 1, "overdue": 0 },
+    { "name": "蔡承恩", "todo": 0, "review": 0, "overdue": 0 }
+  ],
+  "projects": [
+    {
+      "name": "台北南港智慧大樓監控系統",
+      "todo": 6, "review": 3, "overdue": 2,
+      "stages": [
+        { "name": "裝機", "todo": 1, "review": 0 },
+        { "name": "現場設定", "todo": 2, "review": 1 },
+        { "name": "初驗", "todo": 1, "review": 2 },
+        { "name": "問題處理", "todo": 2, "review": 0 }
+      ]
+    },
+    {
+      "name": "新竹科學園區廠務中控",
+      "todo": 3, "review": 2, "overdue": 0,
+      "stages": [
+        { "name": "出貨", "todo": 1, "review": 0 },
+        { "name": "複驗", "todo": 2, "review": 1 },
+        { "name": "教育訓練", "todo": 0, "review": 1 }
+      ]
+    },
+    {
+      "name": "台中市政中心門禁整合",
+      "todo": 0, "review": 2, "overdue": 0,
+      "stages": [
+        { "name": "正驗", "todo": 0, "review": 2 }
+      ]
+    },
+    {
+      "name": "高雄港區智慧建築標章",
+      "todo": 4, "review": 0, "overdue": 1,
+      "stages": [
+        { "name": "智慧建築建資料", "todo": 2, "review": 0 },
+        { "name": "智慧建築預堪", "todo": 1, "review": 0 },
+        { "name": "系統光碟交付", "todo": 1, "review": 0 }
+      ]
+    },
+    {
+      "name": "桃園物流中心擴建",
+      "todo": 0, "review": 0, "overdue": 0,
+      "stages": []
+    }
+  ]
+}

@@ -8,6 +8,7 @@
     "start": "node scripts/start.js"
   },
   "dependencies": {
+    "aedes": "^1.2.0",
     "axios": "^1.7.9",
     "electron-store": "^8.2.0",
     "fast-xml-parser": "^4.5.7",

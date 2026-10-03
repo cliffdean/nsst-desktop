@@ -169,6 +169,10 @@ const STATUS_COLOR_CLASS = {
 };
 
 function statusBadge(ticket) {
+  // 已完成(品保通過)：工單流程上還要工程師回覆並把狀態設為「成功」，所以用圖示跟一般待處理工單區分
+  if (Number(ticket.status) === 2) {
+    return '<span class="status-badge status-finished" title="已完成：品保已通過，還需要工程師回覆並將狀態設為成功">✔ 已完成・待回覆成功</span>';
+  }
   const cls = STATUS_COLOR_CLASS[ticket.status] || 'status-default';
   return `<span class="status-badge ${cls}">${escapeHtml(ticket.status_text || '')}</span>`;
 }
@@ -321,6 +325,180 @@ function bindVersionEditor(container, ticket, onSaved) {
       cancelBtn.disabled = false;
     }
   });
+}
+
+// ---------------- 轉單(僅限「專管」身份，可把工單改指派給別的工程師，不限自己負責的工單) ----------------
+// 主視窗與獨立工單視窗共用，兩邊的HTML都要有transfer-ticket-*這組對話框元素，載入後各自呼叫一次bindTransferTicketModal
+
+let transferTicketIds = [];
+let transferDoneCallback = null;
+let transferOriginalEndTime = ''; // 開窗時預填的結束日期，沒被改動就不送，避免沒必要地改到工單
+let transferEngineersPromise = null;
+
+function loadTransferEngineers() {
+  if (!transferEngineersPromise) {
+    transferEngineersPromise = call(window.api.eip.listEngineers()).then((list) => {
+      if (!list) transferEngineersPromise = null; // 失敗的話下次再重抓
+      return list || [];
+    });
+  }
+  return transferEngineersPromise;
+}
+
+// 批次操作：一張一張送(後端沒有批次API，也比較好知道哪張失敗)，回傳成功的id與失敗的{id, error}
+async function runForEachTicket(ids, request) {
+  const done = [];
+  const failed = [];
+  for (const id of ids) {
+    const res = await request(id);
+    if (res.ok) done.push(id);
+    else failed.push({ id, error: res.error });
+  }
+  return { done, failed };
+}
+
+function batchFailedText(failed) {
+  return failed.map((f) => `${formatTicketNo(f.id)}：${f.error}`).join('\n');
+}
+
+// EIP的時間字串(YYYY-MM-DD HH:MM:SS，0000-00-00代表沒填)轉成datetime-local輸入框要的 YYYY-MM-DDTHH:MM
+function toDatetimeLocal(value) {
+  const v = validTime(value);
+  return v ? v.replace(' ', 'T').slice(0, 16) : '';
+}
+
+// ticketIds：單一id或id陣列(左側批次轉單)；onDone(成功的id，傳入陣列就回陣列)：給呼叫端重新整理畫面用
+// currentEndTime：單張轉單時帶入該工單目前的結束日期當預設值；批次不帶(每張不同)，留空=不改
+async function openTransferTicketModal(ticketIds, onDone, currentEndTime) {
+  const isBatch = Array.isArray(ticketIds);
+  transferTicketIds = isBatch ? ticketIds : [ticketIds];
+  transferDoneCallback = onDone ? (done) => onDone(isBatch ? done : done[0]) : null;
+  $('transfer-ticket-info').value = '';
+  transferOriginalEndTime = isBatch ? '' : toDatetimeLocal(currentEndTime);
+  $('transfer-ticket-end-time').value = transferOriginalEndTime;
+  $('transfer-ticket-message').textContent = isBatch ? `共 ${transferTicketIds.length} 張工單會轉給同一位工程師，並寫入同一段說明` : '';
+  $('transfer-ticket-target').innerHTML = '<option value="">讀取工程師清單中...</option>';
+  $('transfer-ticket-backdrop').classList.remove('hidden');
+
+  const list = (await loadTransferEngineers()).filter((e) => e.is_engineering);
+  $('transfer-ticket-target').innerHTML = list.length
+    ? list.map((e) => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('')
+    : '<option value="">沒有可轉單的工程師</option>';
+}
+
+function closeTransferTicketModal() {
+  $('transfer-ticket-backdrop').classList.add('hidden');
+  transferTicketIds = [];
+  transferDoneCallback = null;
+}
+
+async function submitTransferTicket() {
+  if (!transferTicketIds.length) return;
+  const info = $('transfer-ticket-info').value.trim();
+  const chgUserId = $('transfer-ticket-target').value;
+  if (!chgUserId) {
+    $('transfer-ticket-message').textContent = '請選擇轉單對象';
+    return;
+  }
+  if (!info) {
+    $('transfer-ticket-message').textContent = '請填寫轉單說明';
+    return;
+  }
+
+  const endTimeValue = $('transfer-ticket-end-time').value;
+  const endTime = endTimeValue && endTimeValue !== transferOriginalEndTime ? endTimeValue : '';
+
+  const btn = $('btn-transfer-ticket-submit');
+  btn.disabled = true;
+  $('transfer-ticket-message').textContent = '處理中...';
+  const ids = transferTicketIds;
+  const onDone = transferDoneCallback;
+  const { done, failed } = await runForEachTicket(ids, (id) => window.api.eip.transferTicket(id, info, chgUserId, endTime));
+  btn.disabled = false;
+
+  if (failed.length) {
+    // 有失敗的就留著對話框顯示原因；成功的已經轉出去了，剩下沒成功的可以改完再按一次
+    transferTicketIds = failed.map((f) => f.id);
+    $('transfer-ticket-message').textContent = ids.length > 1
+      ? `成功 ${done.length} 張，失敗 ${failed.length} 張：
+${batchFailedText(failed)}`
+      : '轉單失敗：' + failed[0].error;
+    if (done.length && onDone) onDone(done);
+    return;
+  }
+  closeTransferTicketModal();
+  if (onDone) onDone(done);
+}
+
+function bindTransferTicketModal() {
+  $('btn-transfer-ticket-close').addEventListener('click', closeTransferTicketModal);
+  $('btn-transfer-ticket-submit').addEventListener('click', submitTransferTicket);
+  $('transfer-ticket-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeTransferTicketModal();
+  });
+}
+
+// ---------------- 刪除工單(僅限「專管」，後端只把狀態改成已刪除，並寫一則回覆記錄刪除原因) ----------------
+// 主視窗與獨立工單視窗共用；對話框用JS動態建立，兩邊的HTML都不用另外放元素
+
+// tickets：單一工單物件或陣列(左側批次刪除)；onDone(成功的id，傳入陣列就回陣列)：給呼叫端重新整理畫面用
+function openDeleteTicketDialog(tickets, onDone) {
+  const isBatch = Array.isArray(tickets);
+  let pending = isBatch ? tickets : [tickets];
+  const listHtml = pending.length === 1
+    ? `${escapeHtml(formatTicketNo(pending[0].id))} ${escapeHtml(pending[0].summary || '')}`
+    : `以下 ${pending.length} 張工單：<br>${pending.map((t) => `${escapeHtml(formatTicketNo(t.id))} ${escapeHtml(t.summary || '')}`).join('<br>')}<br>`;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `<div class="modal-box">
+      <div class="modal-header">
+        <h2>刪除工單</h2>
+        <button type="button" data-act="close">✕</button>
+      </div>
+      <p style="color:#d84f4f;max-height:200px;overflow:auto;">確定要刪除 ${listHtml} 嗎？</p>
+      <p class="meta">跟EIP網頁的刪除一樣只會把狀態改成「已刪除」，不會真的移除資料；刪除原因會記錄在工單回覆裡。</p>
+      <label>刪除原因(選填${pending.length > 1 ? '，每張都會寫入同一段' : ''})
+        <textarea rows="3" data-role="reason" placeholder="例如：重複開單"></textarea>
+      </label>
+      <div class="actions">
+        <button type="button" data-act="submit" class="btn-danger">確認刪除</button>
+        <button type="button" data-act="close">取消</button>
+      </div>
+      <p class="meta" data-role="message" style="white-space:pre-line;"></p>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  const message = backdrop.querySelector('[data-role="message"]');
+  const submitBtn = backdrop.querySelector('[data-act="submit"]');
+  const report = (done) => { if (done.length && onDone) onDone(isBatch ? done : done[0]); };
+
+  backdrop.addEventListener('click', async (e) => {
+    if (e.target === backdrop || e.target.closest('[data-act="close"]')) {
+      close();
+      return;
+    }
+    if (!e.target.closest('[data-act="submit"]')) return;
+    submitBtn.disabled = true;
+    message.textContent = '處理中...';
+    const reason = backdrop.querySelector('[data-role="reason"]').value.trim();
+    const total = pending.length;
+    const { done, failed } = await runForEachTicket(pending.map((t) => t.id), (id) => window.api.eip.deleteTicket(id, reason));
+    submitBtn.disabled = false;
+    if (failed.length) {
+      // 失敗的留著讓使用者看原因、可以再按一次重試；成功的先通知呼叫端更新畫面
+      const failedIds = new Set(failed.map((f) => String(f.id)));
+      pending = pending.filter((t) => failedIds.has(String(t.id)));
+      message.textContent = total > 1
+        ? `成功 ${done.length} 張，失敗 ${failed.length} 張：
+${batchFailedText(failed)}`
+        : '刪除失敗：' + failed[0].error;
+      report(done);
+      return;
+    }
+    close();
+    report(done);
+  });
+  backdrop.querySelector('[data-role="reason"]').focus();
 }
 
 // 一則回覆：回覆人／時間／當時標記的狀態、實際工作時段與耗時、回覆內容(EIP富文本HTML)、附檔

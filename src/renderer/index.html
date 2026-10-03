@@ -98,6 +98,141 @@
       <p style="color:#888;font-size:11px;">系統會用你上面填的帳號密碼，自動找出你自己名下、以及別人分享給你的所有行事曆，不用另外設定</p>
     </fieldset>
 
+    <div id="screen-toast" class="screen-toast hidden"></div>
+    <fieldset id="screen-fieldset">
+      <legend>電子紙看板(擴展功能，reTerminal E1002)</legend>
+      <label><input type="checkbox" id="screen-enabled" style="width:auto;display:inline-block;" />
+        啟用電子紙看板(桌面工具內建 MQTT 伺服器，把工程師與追蹤專案的待處理/待審核數據推送到屏幕；沒勾選時這個功能完全不運作)
+      </label>
+      <div id="screen-details" class="hidden">
+        <p id="screen-status" class="screen-status"></p>
+
+        <h4>連接屏幕</h4>
+        <p class="screen-sub">第一次使用或換了網路：在屏幕上<b>同時按住兩顆白鍵 2 秒</b>，用手機連屏幕開的 WiFi 熱點選擇要用的網路；屏幕連上後會把 <b>IP</b> 顯示在螢幕上，填在這裡按「連接屏幕」，MQTT 連線與下面的休眠設定就會自動寫進屏幕。</p>
+        <div class="screen-grid">
+          <label>屏幕 IP
+            <input type="text" id="screen-ip" placeholder="例如 192.168.10.122" />
+          </label>
+          <label>&nbsp;
+            <button id="btn-screen-probe" type="button">測試連線(只讀，不改任何設定)</button>
+          </label>
+          <label>&nbsp;
+            <button id="btn-screen-provision" type="button">連接屏幕並寫入設定</button>
+          </label>
+        </div>
+        <p id="screen-msg-connect" class="screen-msg hidden"></p>
+        <details class="screen-details">
+          <summary>連線資訊(進階：MQTT 伺服器位置)</summary>
+          <div class="screen-grid">
+            <label>桌面工具 IP(寫進屏幕的 MQTT 位置)
+              <select id="screen-host"></select>
+            </label>
+            <label>MQTT 連接埠
+              <input type="text" id="screen-port" />
+            </label>
+            <label>帳號
+              <input type="text" id="screen-user" />
+            </label>
+            <label>密碼(自動產生，勿外流)
+              <input type="text" id="screen-password" readonly />
+            </label>
+            <label>屏幕代號(主題的一段)
+              <input type="text" id="screen-device" />
+            </label>
+            <label>指定 IP(多網卡選不到時才填)
+              <input type="text" id="screen-host-override" placeholder="空白=自動" />
+            </label>
+          </div>
+        </details>
+
+        <h4>數據</h4>
+        <div class="screen-grid">
+          <label>看板標題
+            <input type="text" id="screen-title" />
+          </label>
+          <label>向 EIP 取數據間隔(分鐘)
+            <input type="text" id="screen-refresh-min" />
+          </label>
+        </div>
+        <label><input type="checkbox" id="screen-show-projects" style="width:auto;display:inline-block;" />
+          顯示加星專案(在「專案查詢」加星的專案，含流程各階段的待處理/待審核)
+        </label>
+        <label>工程師「待處理」算到哪一天以前開始的(預設「本週以前」跟左側工單清單一致；週六日派單可選「下週以前」)
+          <select id="screen-todo-range">
+            <option value="week">本週以前(本週五)</option>
+            <option value="next">下週以前(下週五)</option>
+            <option value="all">不限(全部未結案)</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="screen-eng-review-success" style="width:auto;display:inline-block;" />
+          工程師的「待審核」把「成功」也算進去(預設不算：只看送 QC 與已完成)
+        </label>
+        <p class="screen-sub">工單狀態怎麼分類。待處理＝送QC之前(新任務/已指派/已暫停/失敗/追蹤中)；待審核＝從送QC開始、尚未關閉(品保中/已完成/成功)；「已轉品保」的單一律算待審核</p>
+        <div id="screen-status-map" class="screen-grid"></div>
+        <p class="screen-sub">不追蹤的工程師(勾選=不顯示在看板)</p>
+        <div id="screen-blacklist" class="screen-grid"></div>
+
+        <h4>屏幕電源模式(推送給屏幕，下次連線時套用)</h4>
+        <p class="screen-sub">插著 USB 充電時屏幕<b>永遠不休眠</b>，不管選哪種模式。電子紙長時間顯示同一張圖會殘影，所以斷線太久會自動清成白色；長期收納前也可在屏幕上<b>按住綠鍵 5 秒</b>手動清除(按綠鍵或「恢復顯示」再回來)。</p>
+        <div class="screen-grid">
+          <label>模式
+            <select id="screen-power-mode">
+              <option value="smart">1. 智慧：上班時段保持連線(即時)，下班/連不上就睡眠並定時醒來</option>
+              <option value="periodic">2. 定時：每 N 分鐘醒來抓一次，平時睡眠(最省電)</option>
+              <option value="always_on">3. 一律保持連線(即時，耗電較多)</option>
+            </select>
+          </label>
+        </div>
+        <div class="screen-grid">
+          <label>模式1：下班/連不上時，每幾分鐘醒來(0=不定時)
+            <input type="text" id="screen-off-wake-min" />
+          </label>
+          <label>模式2：每幾分鐘醒來抓一次
+            <input type="text" id="screen-wake-min" />
+          </label>
+          <label>上班時段開始
+            <input type="text" id="screen-active-start" placeholder="08:00，空白=全天" />
+          </label>
+          <label>上班時段結束
+            <input type="text" id="screen-active-end" placeholder="19:00" />
+          </label>
+          <label>電量低於幾 % 不再保持連線
+            <input type="text" id="screen-low-battery" />
+          </label>
+          <label>斷線超過幾分鐘清除畫面(0=不清除；1440=24小時)
+            <input type="text" id="screen-clear-hours" />
+          </label>
+          <label>校時伺服器(NTP)
+            <input type="text" id="screen-ntp" />
+          </label>
+          <label>時區(UTC+幾)
+            <input type="text" id="screen-tz" />
+          </label>
+        </div>
+        <label><input type="checkbox" id="screen-weekends-off" style="width:auto;display:inline-block;" />
+          週末算下班時段
+        </label>
+        <label><input type="checkbox" id="screen-periodic-window" style="width:auto;display:inline-block;" />
+          模式2 只在上班時段內醒來
+        </label>
+        <label><input type="checkbox" id="screen-usb-always-on" style="width:auto;display:inline-block;" />
+          插 USB 時不休眠(建議勾選)
+        </label>
+
+        <p class="screen-sub">原則：下面的「測試/預覽/推送/連接」都使用畫面上目前填的值，成功後才會自動儲存；失敗不會存任何東西。</p>
+        <div class="actions">
+          <button id="btn-screen-save" type="button">儲存看板設定</button>
+          <button id="btn-screen-refresh" type="button">立即取數據並推送</button>
+          <button id="btn-screen-preview" type="button">預覽數據</button>
+          <button id="btn-screen-clear" type="button" title="屏幕在線時可用；不在線可在屏幕上按住綠鍵 5 秒">清除屏幕畫面(收納前)</button>
+          <button id="btn-screen-resume" type="button">恢復顯示</button>
+        </div>
+        <p id="screen-dirty" class="screen-dirty hidden">● 有尚未儲存的修改</p>
+        <p id="screen-message" class="screen-msg hidden"></p>
+        <pre id="screen-preview" class="hidden screen-preview"></pre>
+      </div>
+    </fieldset>
+
     <fieldset>
       <legend>回覆範本(依工單類型分開設定，只是給你參考的文字架構，不會自動送出)</legend>
       <label>Bug回報
@@ -126,6 +261,7 @@
     <div class="actions">
       <button id="btn-save-settings">儲存設定</button>
       <button id="btn-test-connection">測試EIP連線</button>
+      <button id="btn-logout" class="btn-danger" title="共用電腦用：同步後清除本機的帳密、Token與個人資料">一鍵退出</button>
     </div>
     <p id="settings-message"></p>
   </section>
@@ -134,21 +270,38 @@
     <div id="home-view" class="home-grid">
       <div class="home-main">
         <div id="ticket-list-view">
+          <div id="project-view-bar" class="project-view-bar hidden">
+            <button id="btn-project-view-exit" type="button" title="回到工程師自己的待辦清單">← 返回清單</button>
+            <span id="project-view-text"></span>
+            <button id="btn-project-view-reload" type="button" title="重新讀取這個專案的工單">重新載入</button>
+          </div>
           <div class="engineer-picker">
             <label for="engineer-select">工程師</label>
             <select id="engineer-select"></select>
             <span id="engineer-readonly-hint" class="meta hidden">檢視他人工單，僅供查看</span>
           </div>
+          <div id="ticket-range" class="ticket-range" title="左側清單列出開始時間在哪一天以前的工單(週六日派單時看下週用)">
+            <button type="button" class="range-btn active" data-range="week">本週以前</button>
+            <button type="button" class="range-btn" data-range="next">下週以前</button>
+            <span id="ticket-range-date" class="meta"></span>
+          </div>
           <div id="ticket-tabs" class="ticket-tabs">
             <button class="tab-btn active" data-tab="normal">待處理<span class="tab-count" id="tab-count-normal"></span></button>
             <button class="tab-btn" data-tab="qc">品保中<span class="tab-count" id="tab-count-qc"></span></button>
           </div>
-          <input type="text" id="ticket-search" placeholder="搜尋工單編號／摘要／專案名稱..." class="search-box" />
+          <div class="ticket-search-row">
+            <input type="text" id="ticket-search" placeholder="搜尋工單編號／摘要／專案名稱..." class="search-box" />
+            <span id="ticket-shown-count" class="ticket-shown-count" title="目前清單實際顯示的工單張數"></span>
+          </div>
           <section id="ticket-list"></section>
 
           <section id="batch-bar" class="hidden">
             <span id="batch-bar-text"></span>
-            <button id="btn-batch-open">批次提交所選工單</button>
+            <button id="btn-batch-select-all" title="勾選目前清單裡的全部工單">全選</button>
+            <button id="btn-batch-open">批次回覆</button>
+            <button id="btn-batch-finish" title="已完成的工單：回覆「完成專案」並轉品保(第二次送QC)">完成並送品保</button>
+            <button id="btn-batch-transfer" class="hidden" title="把所選工單轉給同一位工程師(僅限專管)">批次轉單</button>
+            <button id="btn-batch-delete" class="hidden btn-danger" title="把所選工單標記為已刪除(僅限專管)">批次刪除</button>
             <button id="btn-batch-clear">取消選取</button>
           </section>
         </div>
@@ -156,7 +309,7 @@
         <section id="ticket-detail" class="content-view hidden">
           <button id="btn-back">← 返回清單</button>
           <h2 id="detail-title"></h2>
-          <p><span class="ticket-id" id="detail-id"></span> <button id="btn-copy-id">複製工單號</button> <button id="btn-view-ticket-full" title="在右側顯示這張工單的完整資訊(欄位、描述、附件、全部回覆)">查看工單詳情</button></p>
+          <p><span class="ticket-id" id="detail-id"></span> <button id="btn-copy-id">複製工單號</button> <button id="btn-view-ticket-full" title="在右側顯示這張工單的完整資訊(欄位、描述、附件、全部回覆)">查看工單詳情</button> <button id="btn-delete-ticket" class="hidden btn-danger" title="刪除這張工單(僅限專管)">刪除工單</button></p>
           <p id="detail-project"></p>
           <button id="btn-jump-to-site" class="hidden">查看這個專案的案場/裝機單資訊</button>
           <button id="btn-jump-to-project" class="hidden">查看專案</button>
@@ -276,7 +429,7 @@
 
         <section id="batch-panel" class="content-view hidden">
           <button id="btn-batch-back">← 返回清單</button>
-          <h2>批次提交</h2>
+          <h2 id="batch-panel-title">批次提交</h2>
           <p id="batch-panel-list"></p>
           <p style="color:#888;">批次提交會套用同一份回覆內容與狀態到每一張工單，但每張工單各自的計時紀錄不受影響、會各自結算。</p>
 
@@ -431,17 +584,29 @@
             <button id="btn-project-back">返回信箱／行事曆</button>
           </div>
           <input type="text" id="project-search" class="search-box" placeholder="搜尋專案編號／名稱／代碼／客戶／經銷商..." />
-          <div id="project-status-tabs" class="project-status-tabs">
-            <button class="project-status-btn" data-status="">全部</button>
-            <button class="project-status-btn" data-status="0">未進行</button>
-            <button class="project-status-btn active" data-status="1">進行中</button>
-            <button class="project-status-btn" data-status="2">已完成</button>
-            <button class="project-status-btn" data-status="3">取消(退貨)</button>
+          <div class="project-filter-row">
+            <div id="project-status-tabs" class="project-status-tabs">
+              <button class="project-status-btn" data-status="">全部</button>
+              <button class="project-status-btn" data-status="0">未進行</button>
+              <button class="project-status-btn active" data-status="1">進行中</button>
+              <button class="project-status-btn" data-status="2">已完成</button>
+              <button class="project-status-btn" data-status="3">取消(退貨)</button>
+            </div>
+            <div id="project-dept-tabs" class="project-status-tabs">
+              <span class="project-filter-label">部門</span>
+              <button class="project-dept-btn active" data-dept="">全部</button>
+              <button class="project-dept-btn" data-dept="engineering" title="包含退回工程部的專案">工程部</button>
+              <button class="project-dept-btn" data-dept="finance">財務部</button>
+            </div>
+            <div id="project-star-tabs" class="project-status-tabs">
+              <button id="btn-project-star-only" class="project-star-btn" title="只顯示加星關注的專案(在專案卡片左邊的☆加星)">★ 只看加星<span id="project-star-count"></span></button>
+            </div>
           </div>
           <div class="stage-legend">
             <span><i class="stage-dot stage-s0"></i>未開單</span>
             <span><i class="stage-dot stage-s1"></i>進行中(有未關閉工單)</span>
             <span><i class="stage-dot stage-s2"></i>工單已全部關閉</span>
+            <span><i class="legend-open-docs"></i>專案已完成但仍有未完成工單</span>
             <span class="meta">點流程階段查看該階段的工單</span>
           </div>
           <div id="project-results"></div>
@@ -449,6 +614,7 @@
           <div id="project-tickets" class="hidden">
             <div class="ts-detail-divider">
               <span id="project-tickets-title">▾ 工單</span>
+              <button id="btn-project-tickets-to-left" type="button" title="把下面列出的工單全部放到左側清單，方便勾選後批次轉單分配">⇦ 全部放到左側分配</button>
               <button id="btn-project-tickets-close" type="button">✕ 關閉，回到專案列表</button>
             </div>
             <div id="project-tickets-status-bar" class="ticket-status-bar"></div>
@@ -554,7 +720,7 @@
               <button id="btn-ticket-search-detail-close" type="button">✕ 關閉詳情，回到列表</button>
             </div>
             <h2 id="ticket-search-detail-title"></h2>
-            <p><span class="ticket-id" id="ticket-search-detail-id"></span> <button id="btn-ts-copy-id" type="button">複製工單號</button> <button id="btn-ts-jump-to-site" type="button" class="hidden">查看這個專案的案場／裝機單資訊</button> <button id="btn-ts-jump-to-project" type="button" class="hidden">查看專案</button> <button id="btn-ts-transfer" type="button" class="hidden" title="把工單改指派給別的工程師">轉單</button></p>
+            <p><span class="ticket-id" id="ticket-search-detail-id"></span> <button id="btn-ts-copy-id" type="button">複製工單號</button> <button id="btn-ts-jump-to-site" type="button" class="hidden">查看這個專案的案場／裝機單資訊</button> <button id="btn-ts-jump-to-project" type="button" class="hidden">查看專案</button> <button id="btn-ts-transfer" type="button" class="hidden" title="把工單改指派給別的工程師">轉單</button> <button id="btn-ts-reply" type="button" class="hidden" title="在左側開啟這張工單的回覆畫面">回覆</button> <button id="btn-ts-delete" type="button" class="hidden btn-danger" title="刪除這張工單(僅限專管)">刪除工單</button></p>
             <p id="ticket-search-not-own" class="hidden" style="color:#b6720c;background:#fdf1e0;padding:6px 8px;border-radius:4px;margin:0 0 8px;">
               這張工單不是指派給你的，僅供查詢檢視
             </p>
@@ -593,6 +759,9 @@
         <p class="meta">轉單後工單狀態會變回「已指派」，請簡述轉單原因，這則說明會記錄在工單回覆裡。</p>
         <label>轉單對象(工程部在職人員)
           <select id="transfer-ticket-target"></select>
+        </label>
+        <label>結束日期(選填，不改就留原值；批次轉單時留空=各張維持原本的結束日期)
+          <input type="datetime-local" id="transfer-ticket-end-time" />
         </label>
         <label>轉單說明(必填)
           <textarea id="transfer-ticket-info" rows="4" placeholder="請說明轉單原因..."></textarea>
@@ -647,5 +816,6 @@
 
   <script src="ticket-common.js"></script>
   <script src="renderer.js"></script>
+  <script src="screen-settings.js"></script>
 </body>
 </html>

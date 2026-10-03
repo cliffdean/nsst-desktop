@@ -24,6 +24,25 @@ contextBridge.exposeInMainWorld('api', {
     save: invoke('todo:save'),
     delete: invoke('todo:delete'),
   },
+  // 個人資料同步(存在EIP後端，多台電腦共用)與一鍵退出
+  sync: {
+    now: invoke('sync:now'),
+    onApplied: (callback) => ipcRenderer.on('sync:applied', (_event, keys) => callback(keys)),
+  },
+  auth: {
+    logout: invoke('auth:logout'),
+  },
+  // 電子紙看板(擴展功能：設定、MQTT狀態、立即推送)
+  screen: {
+    saveConfig: invoke('screen:save-config'),
+    status: invoke('screen:status'),
+    refresh: invoke('screen:refresh'),
+    preview: invoke('screen:preview'),
+    command: invoke('screen:command'),
+    probe: invoke('screen:probe'),
+    provision: invoke('screen:provision'),
+    onChanged: (callback) => ipcRenderer.on('screen:changed', () => callback()),
+  },
   notification: {
     show: invoke('notification:show'),
     onShow: (callback) => ipcRenderer.on('notification:push', (_event, data) => callback(data)),
@@ -49,6 +68,7 @@ contextBridge.exposeInMainWorld('api', {
     replyTicket: invoke('eip:reply-ticket'),
     transferTicket: invoke('eip:transfer-ticket'),
     updateTicketVersion: invoke('eip:update-ticket-version'),
+    deleteTicket: invoke('eip:delete-ticket'),
     addTicketVersion: invoke('eip:add-ticket-version'),
     uploadFile: invoke('eip:upload-file'),
     attachFile: invoke('eip:attach-file'),

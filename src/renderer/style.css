@@ -680,7 +680,7 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 #project-panel.has-detail #project-tickets { flex: 1 1 auto; min-height: 0; }
 
 .project-status-tabs { display: flex; gap: 4px; margin: 6px 0; }
-.project-status-btn {
+.project-status-btn, .project-dept-btn, .project-star-btn {
   flex: 1;
   padding: 4px 6px;
   border: 1px solid #cfd4dc;
@@ -689,7 +689,8 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
   font-size: 12px;
   cursor: pointer;
 }
-.project-status-btn.active { background: #2f6fd8; color: #fff; border-color: #2f6fd8; }
+.project-status-btn.active, .project-dept-btn.active { background: #2f6fd8; color: #fff; border-color: #2f6fd8; }
+.project-star-btn.active { background: #f5b301; color: #3a2a00; border-color: #e0a100; font-weight: 600; }
 .status-badge.status-success { background: #e4f4ea; color: #2f8a4f; }
 
 .stage-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 11px; color: #667; margin-bottom: 8px; }
@@ -700,8 +701,14 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .project-card:hover { border-color: #e2e5ea; }
 .project-card.selected { border-color: #2f6fd8; box-shadow: 0 0 0 1px #2f6fd8 inset; }
 /* 加星關注：純本地功能，整張卡片背景上色，列表裡一眼就能認出要盯的專案 */
-.project-card.starred { background: #fff9e0; border-color: #f0dba0; }
+.project-card.starred { background: #e6f6e8; border-color: #a6d9ac; }
 .project-card.starred.selected { border-color: #2f6fd8; }
+/* 專案已完成但仍有未完成工單(只出現在「進行中」)：跟EIP網頁一樣淡橘色底，加星的黃底優先，另用左側橘線標示 */
+.project-card.ended-open-docs { border-left: 4px solid #f0a040; }
+.project-card.ended-open-docs:not(.starred) { background: #fdf0e0; }
+.legend-open-docs { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #fdf0e0; border-left: 3px solid #f0a040; }
+.project-open-docs-note { color: #c06a10; font-size: 12px; font-weight: normal; margin-left: 4px; }
+.project-filter-label { font-size: 12px; color: #667; align-self: center; white-space: nowrap; }
 .project-card-top { display: flex; gap: 10px; align-items: flex-start; }
 .project-card-main { flex: 1 1 auto; min-width: 0; }
 .project-card .install-name { display: flex; align-items: center; gap: 6px; }
@@ -791,3 +798,65 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .stage-s2 { background: #e3edfc; color: #2f6fd8; border-color: #a9c4ef; }
 .stage-chip.stage-s1:hover { background: #fbe3c0; }
 .stage-chip.stage-s2:hover { background: #cfe0fa; }
+
+/* 刪除工單等危險操作(僅限專管) */
+.btn-danger { color: #fff; background: #d84f4f; border-color: #d84f4f; }
+.btn-danger:hover { background: #c03d3d; }
+.btn-danger:disabled { opacity: .6; }
+#transfer-ticket-message { white-space: pre-line; }
+#batch-bar { flex-wrap: wrap; }
+#batch-bar button:disabled { opacity: .5; cursor: not-allowed; }
+#batch-bar-text { flex: 1 1 100%; }
+
+/* 電子紙看板設定 */
+.screen-status { background: #f4f6fa; border-radius: 4px; padding: 8px 10px; line-height: 1.7; color: #3a4252; }
+.screen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 14px; align-items: end; }
+.screen-grid label { margin: 0; }
+.screen-check { display: flex; align-items: center; gap: 4px; }
+.screen-check input { width: auto; }
+.screen-sub { color: #667085; font-size: 12px; margin: 10px 0 4px; }
+.screen-preview { max-height: 320px; overflow: auto; background: #f6f6f6; padding: 8px; font-size: 12px; white-space: pre-wrap; }
+#screen-fieldset h4 { font-size: 13px; color: #556; margin: 14px 0 6px; padding-top: 8px; border-top: 1px solid #eef0f3; }
+.screen-details { margin: 8px 0; }
+.screen-details summary { cursor: pointer; color: #556; font-size: 12px; padding: 4px 0; }
+.screen-dirty { color: #b6720c; background: #fdf1e0; border-radius: 4px; padding: 4px 8px; display: inline-block; margin: 6px 0 0; }
+
+/* 看板設定的操作結果：顯示在按鈕旁邊，並用固定在視窗底部的浮動提示，不管捲到哪裡都看得到 */
+.screen-msg { margin: 8px 0; padding: 8px 10px; border-radius: 6px; line-height: 1.6; background: #eef3fc; color: #2a4f9e; }
+.screen-msg.ok, .screen-toast.ok { background: #e6f5ea; color: #1a6e35; }
+.screen-msg.err, .screen-toast.err { background: #fbe9ea; color: #b3202e; }
+.screen-msg.warn, .screen-toast.warn { background: #fff3dd; color: #8a5a00; }
+.screen-toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2000; max-width: min(640px, calc(100vw - 32px)); padding: 12px 16px; border-radius: 8px; background: #eef3fc; color: #2a4f9e; box-shadow: 0 4px 18px #0003; line-height: 1.6; font-size: 13px; }
+button.busy { opacity: .7; cursor: progress; }
+
+/* 已完成(品保通過、等工程師回覆設為成功)：用綠色圖示標籤與左邊框跟一般待處理工單區分 */
+.status-badge.status-finished { background: #e3f5e8; color: #1a7a3c; border: 1px solid #b6e0c2; }
+.ticket-card.ticket-finished { border-left: 4px solid #3aa55d; background: #f7fcf8; }
+#tab-count-normal { white-space: nowrap; }
+
+/* 專案查詢的篩選列：小按鈕、同一排(放不下才換行)，把可視空間留給下面的專案列表 */
+.project-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 4px 0 2px; }
+.project-filter-row .project-status-tabs { display: inline-flex; gap: 3px; margin: 0; align-items: center; }
+.project-filter-row .project-status-btn,
+.project-filter-row .project-dept-btn,
+.project-filter-row .project-star-btn { flex: none; padding: 2px 8px; font-size: 12px; line-height: 1.5; }
+.project-filter-row .project-filter-label { margin-right: 2px; }
+#project-panel .stage-legend { margin: 2px 0 6px; gap: 2px 10px; font-size: 10.5px; }
+#project-panel .mail-panel-header { margin-bottom: 4px; }
+
+/* 左側搜尋框旁的實際顯示張數；專案工單檢視模式的提示列(放在最上面，附返回) */
+.ticket-search-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ticket-search-row .search-box { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+.ticket-shown-count { flex: none; font-size: 12px; color: #555; white-space: nowrap; }
+.project-view-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin-bottom: 8px; padding: 4px 8px; background: #e8f0fe; border: 1px solid #b6ccf5; border-radius: 4px; font-size: 12px; }
+.project-view-bar span { flex: 1 1 auto; font-weight: 600; color: #1a4fb3; min-width: 0; }
+.project-view-bar button { flex: none; padding: 2px 8px; font-size: 12px; }
+
+.ticket-status-chip.status-preset { background: #fff; color: #333; border: 1px solid #999; margin-right: 6px; }
+.ticket-status-chip.status-preset.active { background: #333; color: #fff; border-color: #333; }
+
+/* 左側清單的時間範圍切換(本週以前/下週以前) */
+.ticket-range { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.ticket-range .range-btn { padding: 2px 10px; font-size: 12px; border: 1px solid #b9c4d6; background: #fff; color: #456; border-radius: 12px; cursor: pointer; }
+.ticket-range .range-btn.active { background: #2f6fd8; border-color: #2f6fd8; color: #fff; font-weight: 600; }
+.ticket-range .meta { margin-left: 4px; font-size: 11px; }

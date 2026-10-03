@@ -2,6 +2,8 @@ const state = {
   settings: null,
   currentUserId: null,
   canTransferTicket: false, // 身份是「專管」才會是true，決定要不要顯示轉單按鈕
+  canEditAnyTicket: false, // 專管：可以回覆/附檔不是指派給自己的工單
+  canDeleteTicket: false, // 專管：可以刪除工單
   tickets: [],
   currentTicket: null,
   currentTicketSearchDetail: null, // 右側工單查詢目前顯示的那張工單，給複製工單號／跳去裝機單查詢用
@@ -9,6 +11,8 @@ const state = {
   tickInterval: null,
   selectedIds: new Set(), // 批次提交用的多選狀態
   searchQuery: '',
+  ticketRange: 'week', // 左側清單的時間範圍：'week'=本週五以前(後端預設)，'next'=下週五以前(週六日派單時用)
+  projectView: null, // 專案工單檢視模式：{ project, filters, label }；左側清單暫時改列某專案的工單(給專管分配用)
   activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單
   viewUserId: null, // 左側清單目前在看哪位工程師的工單；null=自己(每次開App都從自己開始，不記憶)
   engineers: [],
@@ -248,9 +252,8 @@ async function doLogin() {
     return;
   }
   $('login-message').textContent = '登入中...';
-  // 登入用的是「已儲存」的網址；使用者剛改完網址還沒按儲存就登入，會打到舊網址，所以先把網址存起來
-  await call(window.api.settings.save({ eipBaseUrl: baseUrl }));
-  const result = await call(window.api.eip.login(username, password), (err) => {
+  // 用畫面上填的網址登入，成功才一起儲存(登入失敗不會把錯的網址存進設定)
+  const result = await call(window.api.eip.login(username, password, { baseUrl }), (err) => {
     $('login-message').textContent = `登入失敗(連線網址：${baseUrl})：${err}`;
   });
   if (!result) return;
@@ -261,23 +264,71 @@ async function doLogin() {
   $('login-message').textContent = `登入成功，已取得新Token(使用者：${result.user.name})`;
 }
 
+// 一鍵退出(共用電腦用)：主程序會先把待辦/加星等個人資料推到EIP後端，再清掉本機帳密與個人資料，下次登入自動拿回來
+async function doLogout() {
+  if (!confirm('確定要退出嗎？\n\n會清除這台電腦上的EIP Token、信箱帳密、LLM API Key，以及待辦、加星專案、計時等個人資料(已同步到EIP，下次登入會自動拿回來)。')) return;
+  $('settings-message').textContent = '同步並退出中...';
+  let result = await call(window.api.auth.logout(false), (err) => {
+    $('settings-message').textContent = '退出失敗：' + err;
+  });
+  if (!result) return;
+  if (!result.ok) {
+    const keys = result.unsynced.join('、');
+    if (!confirm(`有資料還沒同步到EIP後端(${keys})，可能是目前連不到伺服器。
+強制退出的話，這些沒同步的變動會遺失，確定要強制退出嗎？`)) {
+      $('settings-message').textContent = '已取消退出';
+      return;
+    }
+    result = await call(window.api.auth.logout(true), (err) => {
+      $('settings-message').textContent = '退出失敗：' + err;
+    });
+    if (!result) return;
+  }
+  location.reload(); // 整個畫面重新載入，回到未登入狀態，不留任何前一個人的畫面資料
+}
+
+// 設定畫面的原則：測試一律用「畫面上現在填的值」，測試成功再儲存，不用先存才能測
+function eipFormValues() {
+  return { baseUrl: $('set-eip-url').value.trim(), token: $('set-api-token').value.trim() };
+}
+
+function settingsDiffer(keys) {
+  const saved = state.settings || {};
+  return keys.some((k) => String(saved[k] || '') !== String(({ eipBaseUrl: $('set-eip-url').value.trim(), apiToken: $('set-api-token').value.trim() })[k] || ''));
+}
+
 async function testConnection() {
   $('settings-message').textContent = '測試中...';
-  const data = await call(window.api.eip.whoami(), (err) => {
-    $('settings-message').textContent = '連線失敗：' + err;
+  const form = eipFormValues();
+  const data = await call(window.api.eip.whoami(form), (err) => {
+    $('settings-message').textContent = `連線失敗(網址：${form.baseUrl})：${err}`;
   });
   if (data) {
-    $('settings-message').textContent = `連線成功，登入身分：${data.name} (id=${data.id})`;
+    const unsaved = settingsDiffer(['eipBaseUrl', 'apiToken']);
+    $('settings-message').textContent = `連線成功，登入身分：${data.name} (id=${data.id})${unsaved ? '　→ 確認無誤請按「儲存設定」套用' : ''}`;
   }
+}
+
+function mailFormValues() {
+  return {
+    username: $('set-mail-username').value.trim(),
+    password: $('set-mail-password').value,
+    imapHost: $('set-mail-imap-host').value.trim(),
+    imapPort: parseInt($('set-mail-imap-port').value, 10) || 993,
+    imapAllowInsecureTLS: $('set-mail-imap-insecure').checked,
+  };
 }
 
 async function testMailConnection() {
   $('settings-message').textContent = '測試信箱連線中...';
-  const result = await call(window.api.mail.listRecent(5), (err) => {
+  const result = await call(window.api.mail.listRecent(5, mailFormValues()), (err) => {
     $('settings-message').textContent = '信箱連線失敗：' + err;
   });
   if (result) {
-    $('settings-message').textContent = `信箱連線成功，共${result.messages.length}封(未讀${result.unseenCount}封)`;
+    const saved = (state.settings && state.settings.mail) || {};
+    const form = mailFormValues();
+    const unsaved = ['username', 'password', 'imapHost', 'imapPort', 'imapAllowInsecureTLS'].some((k) => String(saved[k] || '') !== String(form[k] || ''));
+    $('settings-message').textContent = `信箱連線成功，共${result.messages.length}封(未讀${result.unseenCount}封)${unsaved ? '　→ 確認無誤請按「儲存設定」套用' : ''}`;
   }
 }
 
@@ -645,7 +696,9 @@ let projectSearchTimer = null;
 let projectSearchSeq = 0; // 連續打字會發出好幾次搜尋，只採用最後一次的結果，避免晚回來的舊結果蓋掉新的
 let projectTicketsSeq = 0;
 // selected = { projectId, stage }，stage為null代表全部階段；ticketStatusFilter是目前勾選的工單狀態代碼集合(可複選，空集合=不篩選)
-const projectPanel = { status: '1', projects: [], selected: null, ticketStatusFilter: new Set() };
+// dept：目前所在部門篩選，''=全部、engineering(含退回工程部)、finance
+// starOnly：只看加星的專案(依加星清單逐一用專案編號查詢，不受「最新300筆」限制，狀態/所在部門/關鍵字篩選仍然有效)
+const projectPanel = { status: '1', dept: '', starOnly: false, projects: [], selected: null, ticketStatusFilter: new Set() };
 
 // 工單狀態篩選按鈕，對照EIP網頁manage/internal/InternalController的$h_status/$h_colors(不含9已刪除，這個列表本來就排除已刪除)
 const TICKET_STATUS_OPTIONS = [
@@ -682,7 +735,9 @@ async function jumpToProject(projectId) {
   if (!projectId) return;
   await openProjectPanel(true);
   projectPanel.status = '';
+  projectPanel.dept = '';
   document.querySelectorAll('.project-status-btn').forEach((el) => el.classList.toggle('active', el.dataset.status === ''));
+  document.querySelectorAll('.project-dept-btn').forEach((el) => el.classList.toggle('active', el.dataset.dept === ''));
   $('project-search').value = String(projectId);
   await runProjectSearch();
   const card = $('project-results').querySelector(`.project-card[data-id="${projectId}"]`);
@@ -698,6 +753,12 @@ async function jumpToProject(projectId) {
 async function loadStarredProjects() {
   const ids = await call(window.api.projectStar.list());
   if (ids) state.starredProjects = new Set(ids.map(String));
+  updateProjectStarCount();
+}
+
+function updateProjectStarCount() {
+  const el = $('project-star-count');
+  if (el) el.textContent = state.starredProjects.size ? `(${state.starredProjects.size})` : '';
 }
 
 function toggleProjectStar(projectId) {
@@ -706,7 +767,15 @@ function toggleProjectStar(projectId) {
     if (starred === undefined) return;
     if (starred) state.starredProjects.add(key);
     else state.starredProjects.delete(key);
+    updateProjectStarCount();
     const card = document.querySelector(`.project-card[data-id="${key}"]`);
+    if (card && projectPanel.starOnly && !starred) { // 只看加星時取消星號：這張從清單移除
+      projectPanel.projects = projectPanel.projects.filter((p) => String(p.id) !== key);
+      if (projectPanel.selected && String(projectPanel.selected.projectId) === key) closeProjectTickets();
+      card.remove();
+      if (!projectPanel.projects.length) $('project-results').innerHTML = '<p style="color:#888;">已經沒有加星的專案了</p>';
+      return;
+    }
     if (card) {
       card.classList.toggle('starred', starred);
       const starBtn = card.querySelector('.btn-project-star');
@@ -731,17 +800,53 @@ function closeProjectTickets() {
   renderProjectSelection();
 }
 
+// 只看加星：加星清單逐一用「#專案編號」查(後端搜尋接受)，狀態/所在部門照目前的篩選，關鍵字在本地比對
+async function fetchStarredProjects(q, seq) {
+  const ids = [...state.starredProjects];
+  let failed = 0;
+  const found = [];
+  for (let i = 0; i < ids.length; i += 4) { // 每批4個，不一次把後端灌爆
+    const batch = await Promise.all(ids.slice(i, i + 4).map(async (id) => {
+      const list = await call(window.api.eip.listProjects(`#${id}`, projectPanel.status, projectPanel.dept), () => { failed++; });
+      return (list || []).find((p) => String(p.id) === id) || null;
+    }));
+    if (seq !== projectSearchSeq) return null; // 途中又有新的搜尋，這次作廢
+    found.push(...batch.filter(Boolean));
+  }
+  if (failed && !found.length) throw new Error('讀取加星專案失敗，請稍後再試');
+  const kw = q.toLowerCase();
+  const matches = !kw ? found : found.filter((p) => [String(p.id), p.name, p.code, p.customer_name, p.dealer_name].some((v) => String(v || '').toLowerCase().includes(kw)));
+  return matches.sort((a, b) => b.id - a.id);
+}
+
 async function runProjectSearch() {
   const seq = ++projectSearchSeq;
   const q = $('project-search').value.trim();
   $('project-results').innerHTML = '<p style="color:#888;">讀取中...</p>';
-  const projects = await call(window.api.eip.listProjects(q, projectPanel.status), (err) => {
-    if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err)}</p>`;
-  });
+  let projects;
+  if (projectPanel.starOnly) {
+    if (!state.starredProjects.size) {
+      $('project-results').innerHTML = '<p style="color:#888;">還沒有加星的專案。點專案卡片左邊的 ☆ 就能加星關注。</p>';
+      projectPanel.projects = [];
+      return;
+    }
+    try {
+      projects = await fetchStarredProjects(q, seq);
+    } catch (err) {
+      if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err.message)}</p>`;
+      return;
+    }
+  } else {
+    projects = await call(window.api.eip.listProjects(q, projectPanel.status, projectPanel.dept), (err) => {
+      if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err)}</p>`;
+    });
+  }
   if (!projects || seq !== projectSearchSeq) return;
   projectPanel.projects = projects;
   if (!projects.length) {
-    $('project-results').innerHTML = '<p style="color:#888;">沒有符合的專案</p>';
+    $('project-results').innerHTML = projectPanel.starOnly
+      ? `<p style="color:#888;">加星的 ${state.starredProjects.size} 個專案裡，沒有符合目前條件(狀態/所在部門/關鍵字)的。可以把「狀態」改成「全部」看看。</p>`
+      : '<p style="color:#888;">沒有符合的專案</p>';
     return;
   }
   $('project-results').innerHTML =
@@ -764,12 +869,12 @@ function projectCardHtml(p) {
     })
     .join('');
   const starred = state.starredProjects.has(String(p.id));
-  return `<div class="install-card project-card${starred ? ' starred' : ''}" data-id="${p.id}">
+  return `<div class="install-card project-card${starred ? ' starred' : ''}${p.ended_with_open_docs ? ' ended-open-docs' : ''}" data-id="${p.id}">
     <div class="project-card-top">
       <div class="project-card-main">
         <div class="install-name">
           <button type="button" class="btn-project-star" data-pid="${p.id}" title="${starred ? '取消關注' : '加星關注'}">${starred ? '★' : '☆'}</button>
-          #${p.id} ${escapeHtml(p.name || '(無名稱)')}<span class="status-badge ${PROJECT_STATUS_CLASS[p.status_color] || 'status-default'}">${escapeHtml(p.status_text || '')}</span>
+          #${p.id} ${escapeHtml(p.name || '(無名稱)')}<span class="status-badge ${PROJECT_STATUS_CLASS[p.status_color] || 'status-default'}">${escapeHtml(p.status_text || '')}</span>${p.ended_with_open_docs ? '<span class="project-open-docs-note">仍有未完成工單</span>' : ''}
         </div>
         ${p.parent_name ? `<div class="project-parent">追加專案（主專案：${escapeHtml(p.parent_name)}）</div>` : ''}
         <div class="ts-card-meta">
@@ -898,8 +1003,24 @@ async function openProjectTickets(projectId, stage) {
 }
 
 // 工單狀態篩選按鈕列：可複選，對照EIP網頁manage/internal/index的狀態勾選按鈕
+// 「待處理」快捷：一次勾選 新任務、已指派、已暫停、未定義、追蹤中(還沒送品保、也沒結束的狀態)
+const PENDING_STATUS_PRESET = [0, 1, 3, 6, 7];
+
+function isPendingPresetActive() {
+  const f = projectPanel.ticketStatusFilter;
+  return f.size === PENDING_STATUS_PRESET.length && PENDING_STATUS_PRESET.every((c) => f.has(c));
+}
+
+function togglePendingPreset() {
+  projectPanel.ticketStatusFilter = isPendingPresetActive() ? new Set() : new Set(PENDING_STATUS_PRESET);
+  renderTicketStatusFilterBar();
+  loadProjectTickets();
+}
+
 function renderTicketStatusFilterBar() {
-  $('project-tickets-status-bar').innerHTML = TICKET_STATUS_OPTIONS.map(([code, text, cls]) => {
+  const presetActive = isPendingPresetActive();
+  const presetBtn = `<button type="button" class="ticket-status-chip status-preset${presetActive ? ' active' : ''}" data-preset="pending" title="一次勾選：新任務、已指派、已暫停、未定義、追蹤中；再點一次取消">待處理${presetActive ? ' ✓' : ''}</button>`;
+  $('project-tickets-status-bar').innerHTML = presetBtn + TICKET_STATUS_OPTIONS.map(([code, text, cls]) => {
     const active = projectPanel.ticketStatusFilter.has(code);
     return `<button type="button" class="ticket-status-chip ${cls}${active ? ' active' : ''}" data-status="${code}">${text}${active ? ' ✓' : ''}</button>`;
   }).join('');
@@ -912,6 +1033,16 @@ function toggleTicketStatusFilter(code) {
   loadProjectTickets();
 }
 
+// 目前右側專案工單列表用的查詢條件(「放到左側」也用同一份，所見即所得)
+function currentProjectTicketFilters(project, sel) {
+  const statuses = projectPanel.ticketStatusFilter.size
+    ? Array.from(projectPanel.ticketStatusFilter).join(',')
+    : '0,1,2,3,4,5,6,7,8,10';
+  const filters = { project_id: project.id, status: statuses, order_by: 'id', order_dir: 'desc', per_page: 100 };
+  if (sel.stage != null) filters.task_stage = sel.stage;
+  return filters;
+}
+
 // 依目前選定的專案/階段/狀態篩選重新查詢工單列表；不帶狀態篩選時維持原本「排除已刪除」的範圍
 async function loadProjectTickets() {
   const sel = projectPanel.selected;
@@ -922,11 +1053,7 @@ async function loadProjectTickets() {
   $('project-tickets-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
 
   const seq = ++projectTicketsSeq;
-  const statuses = projectPanel.ticketStatusFilter.size
-    ? Array.from(projectPanel.ticketStatusFilter).join(',')
-    : '0,1,2,3,4,5,6,7,8,10';
-  const filters = { project_id: project.id, status: statuses, order_by: 'id', order_dir: 'desc', per_page: 100 };
-  if (sel.stage != null) filters.task_stage = sel.stage;
+  const filters = currentProjectTicketFilters(project, sel);
   const res = await call(window.api.eip.advancedSearchTickets(filters), (err) => {
     if (seq === projectTicketsSeq) $('project-tickets-list').innerHTML = `<p style="color:#d84f4f;">讀取工單失敗：${escapeHtml(err)}</p>`;
   });
@@ -945,6 +1072,71 @@ async function loadProjectTickets() {
   $('project-tickets-list').querySelectorAll('.ticket-search-card').forEach((el) => {
     el.addEventListener('click', () => call(window.api.window.openTicket(el.dataset.id)));
   });
+}
+
+// ---------------- 專案工單檢視(把專案的工單放到左側清單，方便勾選後批次轉單分配) ----------------
+
+async function sendProjectTicketsToLeft() {
+  const sel = projectPanel.selected;
+  if (!sel) return;
+  const project = projectPanel.projects.find((p) => String(p.id) === String(sel.projectId));
+  if (!project) return;
+  const stageInfo = sel.stage != null ? project.stages.find((s) => s.index === sel.stage) : null;
+  state.projectView = {
+    project,
+    filters: currentProjectTicketFilters(project, sel),
+    label: `${project.name}　${stageInfo ? stageInfo.name : '全部階段'}`,
+  };
+  if (state.currentTicket) backToList();
+  state.selectedIds.clear();
+  state.searchQuery = '';
+  $('ticket-search').value = '';
+  $('ticket-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
+  updateProjectViewUi();
+  updateBatchBar();
+  await loadProjectViewTickets();
+}
+
+// 逐頁讀完(一頁最多100張)，不像右側列表只顯示最新100張，分配時要看得到全部
+async function loadProjectViewTickets() {
+  const view = state.projectView;
+  if (!view) return;
+  const items = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await call(window.api.eip.advancedSearchTickets({ ...view.filters, page }), (err) => {
+      if (state.projectView === view) $('ticket-list').innerHTML = `<p style="color:#d84f4f;">讀取專案工單失敗：${escapeHtml(err)}</p>`;
+    });
+    if (!res) return;
+    items.push(...res.items);
+    const total = res.meta ? Number(res.meta.total) : items.length;
+    if (!res.items.length || items.length >= total) break;
+  }
+  if (state.projectView !== view) return;
+  state.tickets = items;
+  const alive = new Set(items.map((t) => String(t.id)));
+  [...state.selectedIds].forEach((id) => { if (!alive.has(id)) state.selectedIds.delete(id); });
+  renderTicketList();
+  updateBatchBar();
+}
+
+function updateProjectViewUi() {
+  const view = state.projectView;
+  $('project-view-bar').classList.toggle('hidden', !view);
+  $('ticket-tabs').classList.toggle('hidden', !!view);
+  $('ticket-range').classList.toggle('hidden', !!view);
+  $('engineer-readonly-hint').classList.toggle('hidden', !!view || !isViewingOtherEngineer());
+  if (view) $('project-view-text').textContent = `專案工單：${view.label}`;
+}
+
+function exitProjectView() {
+  if (!state.projectView) return;
+  state.projectView = null;
+  state.tickets = [];
+  state.selectedIds.clear();
+  updateProjectViewUi();
+  updateBatchBar();
+  $('ticket-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
+  refreshTicketList();
 }
 
 function onProjectResultsClick(e) {
@@ -1019,6 +1211,20 @@ function onProjectResultsChange(e) {
   });
 }
 
+function switchProjectDept(dept) {
+  projectPanel.dept = dept;
+  document.querySelectorAll('.project-dept-btn').forEach((el) => el.classList.toggle('active', el.dataset.dept === dept));
+  closeProjectTickets();
+  runProjectSearch();
+}
+
+function switchProjectStarOnly() {
+  projectPanel.starOnly = !projectPanel.starOnly;
+  $('btn-project-star-only').classList.toggle('active', projectPanel.starOnly);
+  closeProjectTickets();
+  runProjectSearch();
+}
+
 function switchProjectStatus(status) {
   projectPanel.status = status;
   document.querySelectorAll('.project-status-btn').forEach((el) => el.classList.toggle('active', el.dataset.status === status));
@@ -1051,8 +1257,13 @@ function openTicketSearchPanel(focusSearch = true, skipInitialSearch = false) {
 // 這時把上面的搜尋列表也帶成只有這一張單，畫面才不會「上面顯示一堆別的工單、下面卻是這張的詳情」，看起來對不起來
 function viewCurrentTicketFull() {
   if (!state.currentTicket) return;
+  viewTicketFullInSidebar(state.currentTicket.id);
+}
+
+// 在右側欄打開某張工單的完整詳情(欄位、描述、附件、全部回覆)，左側清單/詳情維持不動，方便對照
+function viewTicketFullInSidebar(ticketId) {
   openTicketSearchPanel(false, true);
-  openTicketSearchDetail(state.currentTicket.id, true);
+  openTicketSearchDetail(ticketId, true);
 }
 
 function closeTicketSearchPanel() {
@@ -1549,6 +1760,11 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('btn-ts-jump-to-project').classList.toggle('hidden', !ticket.project_id);
   // 轉單僅限「專管」身份，且只有「已指派」狀態的工單可以轉(跟後端transfer()的限制一致)
   $('btn-ts-transfer').classList.toggle('hidden', !state.canTransferTicket || ticket.status !== 1);
+  // 專管可以回覆別人的工單：回覆表單在左側工單詳情，這裡給個按鈕直接開過去；已結束(成功/關閉/刪除)的單後端不收回覆
+  const closed = [2, 4, 8, 9].includes(ticket.status);
+  $('btn-ts-reply').classList.toggle('hidden', closed || (!isOwn && !state.canEditAnyTicket));
+  $('btn-ts-delete').classList.toggle('hidden', !state.canDeleteTicket || ticket.status === 9);
+  if (!isOwn && state.canEditAnyTicket) $('ticket-search-not-own').textContent = '這張工單不是指派給你的，你是專管，可以回覆、轉單或刪除';
   state.currentTicketSearchDetail = ticket; // 給複製工單號／跳去裝機單查詢／轉單的按鈕用
 
   $('ticket-search-detail-basic').innerHTML = ticketFullInfoRows(ticket);
@@ -1567,56 +1783,6 @@ async function openTicketSearchDetail(id, syncList = false) {
     : '<span style="color:#888;font-size:12px;">目前沒有回覆記錄</span>';
 
   bindAttachmentLinks($('ticket-search-detail'));
-}
-
-// ---------------- 轉單(僅限「專管」身份，可把工單改指派給別的工程師，不限自己負責的工單) ----------------
-
-let transferTicketId = null;
-
-async function openTransferTicketModal(ticketId) {
-  transferTicketId = ticketId;
-  $('transfer-ticket-info').value = '';
-  $('transfer-ticket-message').textContent = '';
-  $('transfer-ticket-target').innerHTML = '<option value="">讀取工程師清單中...</option>';
-  $('transfer-ticket-backdrop').classList.remove('hidden');
-
-  const engineers = state.engineers && state.engineers.length ? state.engineers : await call(window.api.eip.listEngineers());
-  const list = (engineers || []).filter((e) => e.is_engineering);
-  $('transfer-ticket-target').innerHTML = list.length
-    ? list.map((e) => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('')
-    : '<option value="">沒有可轉單的工程師</option>';
-}
-
-function closeTransferTicketModal() {
-  $('transfer-ticket-backdrop').classList.add('hidden');
-  transferTicketId = null;
-}
-
-async function submitTransferTicket() {
-  if (!transferTicketId) return;
-  const info = $('transfer-ticket-info').value.trim();
-  const chgUserId = $('transfer-ticket-target').value;
-  if (!chgUserId) {
-    $('transfer-ticket-message').textContent = '請選擇轉單對象';
-    return;
-  }
-  if (!info) {
-    $('transfer-ticket-message').textContent = '請填寫轉單說明';
-    return;
-  }
-
-  const btn = $('btn-transfer-ticket-submit');
-  btn.disabled = true;
-  $('transfer-ticket-message').textContent = '處理中...';
-  const ticketId = transferTicketId;
-  const result = await call(window.api.eip.transferTicket(ticketId, info, chgUserId), (err) => {
-    $('transfer-ticket-message').textContent = '轉單失敗：' + err;
-  });
-  btn.disabled = false;
-  if (!result) return;
-
-  closeTransferTicketModal();
-  openTicketSearchDetail(ticketId); // 重新整理詳情，顯示轉單後的最新狀態/負責人員/回覆紀錄
 }
 
 async function refreshMail() {
@@ -1921,6 +2087,9 @@ async function deleteCurrentEvent() {
 // ---------------- 工單清單(含inline計時器，因為多張工單可能同時在跑) ----------------
 
 function timerControlsHtml(ticket) {
+  if (ticket.pending_reply) {
+    return '<div class="card-timer-note">已完成，等待工程師回覆並設為成功，不需要計時</div>';
+  }
   if (ticket.is_qc_stage) {
     return '<div class="card-timer-note">品保審核中，不需要計時</div>';
   }
@@ -1938,7 +2107,7 @@ function timerControlsHtml(ticket) {
 }
 
 function filteredTickets() {
-  const byTab = state.tickets.filter((t) => (state.activeTab === 'qc' ? t.is_qc_stage : !t.is_qc_stage));
+  const byTab = state.projectView ? state.tickets : state.tickets.filter((t) => (state.activeTab === 'qc' ? t.is_qc_stage : !t.is_qc_stage));
   const q = state.searchQuery.trim().toLowerCase();
   const filtered = !q ? byTab : byTab.filter((t) => {
     return (
@@ -1948,6 +2117,7 @@ function filteredTickets() {
     );
   });
   return filtered.sort((a, b) => {
+    if (!!a.pending_reply !== !!b.pending_reply) return a.pending_reply ? 1 : -1;
     const aTime = Date.parse(ticketDueValue(a));
     const bTime = Date.parse(ticketDueValue(b));
     if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
@@ -1975,9 +2145,12 @@ function ticketDueClass(ticket) {
 }
 
 function updateTabCounts() {
-  const normalCount = state.tickets.filter((t) => !t.is_qc_stage).length;
+  // 「待處理」後面的數字只算送QC之前(新任務/已指派/已暫停/追蹤中…)；已完成(待回覆成功)的會列在清單裡但不計入，另外用 ✔ 標示張數
+  const normalCount = state.tickets.filter((t) => !t.is_qc_stage && !t.pending_reply).length;
+  const finishedCount = state.tickets.filter((t) => t.pending_reply).length;
   const qcCount = state.tickets.filter((t) => t.is_qc_stage).length;
-  $('tab-count-normal').textContent = `(${normalCount})`;
+  $('tab-count-normal').textContent = `(${normalCount})${finishedCount ? ` ✔${finishedCount}` : ''}`;
+  $('tab-count-normal').title = finishedCount ? `${normalCount} 張待處理；另有 ${finishedCount} 張已完成，等待回覆並設為成功(列在清單最後，用 ✔ 標示)` : '';
   $('tab-count-qc').textContent = `(${qcCount})`;
 }
 
@@ -1991,36 +2164,46 @@ function switchTab(tab) {
 
 function renderTicketList() {
   const container = $('ticket-list');
-  updateTabCounts();
+  if (!state.projectView) updateTabCounts();
   const tickets = filteredTickets();
+  // 搜尋框旁顯示實際列出的張數
+  $('ticket-shown-count').textContent = `${tickets.length} 張`;
   if (!tickets.length) {
     const emptyText = state.searchQuery
       ? '沒有符合搜尋的工單'
+      : state.projectView
+      ? '這個專案在目前的篩選下沒有工單'
       : state.activeTab === 'qc'
       ? '目前沒有品保審核中的工單'
-      : '目前沒有本週五之前需要處理的工單';
+      : state.ticketRange === 'next' ? '目前沒有下週五之前需要處理的工單' : '目前沒有本週五之前需要處理的工單';
     container.innerHTML = `<p>${emptyText}。</p>`;
     return;
   }
-  // 檢視其他工程師的工單時只能看：不顯示批次勾選、計時、附加檔案(後端也只允許本人回覆/附檔)
-  const readonly = isViewingOtherEngineer();
+  // 檢視其他工程師的工單時只能看：不顯示批次勾選、計時、附加檔案(後端也只允許本人回覆/附檔)；專管例外，可以直接處理
+  const readonlyAll = isViewingOtherEngineer() && !state.canEditAnyTicket;
+  // 專案工單檢視：混著各工程師的單，逐張判斷是不是自己的(別人的單非專管只能看)
+  const readonlyOf = (t) => (state.projectView
+    ? !state.canEditAnyTicket && Number(t.p_user_id) !== Number(state.currentUserId)
+    : readonlyAll);
   container.innerHTML = tickets
-    .map(
-      (t) => `
-      <div class="ticket-card ${ticketDueClass(t)}" data-id="${t.id}">
+    .map((t) => {
+      const readonly = readonlyOf(t);
+      return `
+      <div class="ticket-card ${t.pending_reply ? 'ticket-finished' : ticketDueClass(t)}" data-id="${t.id}">
         <div class="row1">
           ${readonly ? '' : `<label class="card-select"><input type="checkbox" class="chk-select" data-id="${t.id}" ${state.selectedIds.has(String(t.id)) ? 'checked' : ''} /></label>`}
           <span>#${t.id} ${t.project_name || t.name || ''}</span>${statusBadge(t)}
         </div>
         <div class="summary">${t.summary || ''}</div>
-        <div class="meta">開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}${t.version_text ? `　版本：${escapeHtml(t.version_text)}` : ''}</div>
-        ${readonly ? '' : timerControlsHtml(t)}
+        <div class="meta">${state.projectView && t.p_user_name ? `負責：${escapeHtml(t.p_user_name)}　` : ''}開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}${t.version_text ? `　版本：${escapeHtml(t.version_text)}` : ''}</div>
+        ${readonly && !t.pending_reply ? '' : timerControlsHtml(t)}
         <div class="card-actions-row">
+          <button class="btn-card-view-full" data-id="${t.id}" title="在右側打開這張工單的完整詳情">查看工單</button>
           <button class="btn-card-copy-id" data-id="${t.id}" title="複製工單號到剪貼簿">複製單號</button>
           ${readonly ? '' : `<button class="btn-card-attach" data-id="${t.id}" title="不寫回覆，直接上傳檔案掛到這張工單">附加檔案</button>`}
         </div>
-      </div>`
-    )
+      </div>`;
+    })
     .join('');
 
   // 整張卡片都能點開詳情，只有勾選框/計時按鈕/附加檔案這些「卡片上的其他操作」要排除，不然會被誤觸連帶打開詳情
@@ -2029,6 +2212,9 @@ function renderTicketList() {
       if (e.target.closest('button, input, label')) return;
       openTicketDetail(el.dataset.id);
     });
+  });
+  container.querySelectorAll('.btn-card-view-full').forEach((el) => {
+    el.addEventListener('click', () => viewTicketFullInSidebar(el.dataset.id));
   });
   container.querySelectorAll('.btn-card-copy-id').forEach((el) => {
     el.addEventListener('click', () => copyWithFeedback(el, el.dataset.id));
@@ -2069,26 +2255,76 @@ function selectedTickets() {
   return state.tickets.filter((t) => state.selectedIds.has(String(t.id)));
 }
 
+// 已完成(品保通過、等工程師回覆送品保)的工單：後端待辦清單不回傳，是桌面工具另外查出來標上 pending_reply 的
+function isFinishedTicket(t) {
+  return Number(t.status) === 2 && !t.is_qc_stage;
+}
+
+// 「完成並送品保」不能用的原因；空字串=可以
+function finishBlockReason(selected) {
+  if (!selected.length) return '';
+  if (isViewingOtherEngineer()) return '只能處理自己負責的工單(目前在看別人的清單)';
+  const notFinished = selected.filter((t) => !isFinishedTicket(t));
+  if (notFinished.length) return `只有「已完成」狀態的工單可以送品保，所選有 ${notFinished.length} 張不是`;
+  const notMine = selected.filter((t) => state.currentUserId != null && Number(t.p_user_id) !== Number(state.currentUserId));
+  if (notMine.length) return `只能處理自己負責的工單，所選有 ${notMine.length} 張不是你的`;
+  return '';
+}
+
+// 勾選1張以上就顯示批次操作列；各按鈕依所選工單是否符合條件啟用/停用，停用時把原因寫在按鈕的提示文字
 function updateBatchBar() {
   const selected = selectedTickets();
   const bar = $('batch-bar');
-  if (selected.length < 2) {
+  if (!selected.length) {
     bar.classList.add('hidden');
     return;
   }
   bar.classList.remove('hidden');
+
+  // 批次回覆：沿用原本限制，至少2張、同一專案、品保階段一致(回覆內容/Git commit是同一份)
   const projectIds = new Set(selected.map((t) => String(t.project_id || '')));
   const qcStages = new Set(selected.map((t) => !!t.is_qc_stage));
-  if (projectIds.size > 1) {
-    $('batch-bar-text').textContent = `已選 ${selected.length} 張，但分屬不同專案，批次提交只支援同一個專案`;
-    $('btn-batch-open').disabled = true;
-  } else if (qcStages.size > 1) {
-    $('batch-bar-text').textContent = `已選 ${selected.length} 張，但有的已轉品保有的還沒，批次提交需要階段一致`;
-    $('btn-batch-open').disabled = true;
-  } else {
-    $('batch-bar-text').textContent = `已選 ${selected.length} 張工單(同一專案)`;
-    $('btn-batch-open').disabled = false;
-  }
+  let replyBlock = '';
+  if (selected.length < 2) replyBlock = '批次回覆至少要選2張；單張請直接點開工單回覆';
+  else if (projectIds.size > 1) replyBlock = '分屬不同專案，批次回覆只支援同一個專案';
+  else if (qcStages.size > 1) replyBlock = '有的已轉品保有的還沒，批次回覆需要階段一致';
+  // 已完成的單走「完成並送品保」，不能用一般的批次回覆(狀態選項不同)
+  const finishedSelected = selected.filter(isFinishedTicket);
+  if (finishedSelected.length) replyBlock = '所選包含「已完成」的工單，請改用「完成並送品保」(一般批次回覆不適用)';
+  $('btn-batch-open').disabled = !!replyBlock;
+  $('btn-batch-open').title = replyBlock || '同一段回覆送到所選的每一張工單';
+
+  // 完成並送品保：只能用在「已完成」狀態、而且是自己負責的工單(跟後端reply()的限制一致)
+  const finishBlock = finishBlockReason(selected);
+  $('btn-batch-finish').disabled = !!finishBlock;
+  $('btn-batch-finish').title = finishBlock || '把所選已完成的工單回覆「完成專案」並轉品保(第二次送QC)';
+
+  // 批次轉單：僅限專管，且全部都要是「已指派」(跟後端transfer()的限制一致)
+  $('btn-batch-transfer').classList.toggle('hidden', !state.canTransferTicket);
+  const notAssigned = selected.filter((t) => t.status !== 1);
+  $('btn-batch-transfer').disabled = notAssigned.length > 0;
+  $('btn-batch-transfer').title = notAssigned.length
+    ? `只有「已指派」狀態的工單可以轉單，所選有 ${notAssigned.length} 張不是`
+    : '把所選工單轉給同一位工程師(僅限專管)';
+
+  $('btn-batch-delete').classList.toggle('hidden', !state.canDeleteTicket);
+
+  $('batch-bar-text').textContent = `已選 ${selected.length} 張工單${projectIds.size === 1 ? '(同一專案)' : `(${projectIds.size} 個專案)`}${replyBlock ? `　※${replyBlock}` : ''}`;
+}
+
+// 全選目前畫面上(目前頁籤＋搜尋條件篩選後)的工單
+function selectAllVisibleTickets() {
+  filteredTickets().forEach((t) => state.selectedIds.add(String(t.id)));
+  renderTicketList();
+  updateBatchBar();
+}
+
+// 批次轉單/刪除完成後：清掉已處理的勾選、重新整理清單；左側正在看其中一張就重新讀取
+function afterBatchTicketAction(doneIds) {
+  doneIds.forEach((id) => state.selectedIds.delete(String(id)));
+  if (state.currentTicket && doneIds.map(String).includes(String(state.currentTicket.id))) backToList();
+  updateBatchBar();
+  refreshTicketList();
 }
 
 function clearSelection() {
@@ -2097,18 +2333,23 @@ function clearSelection() {
   renderTicketList();
 }
 
-async function openBatchPanel() {
+// mode='finish'：已完成的工單批次「完成專案並轉品保」(1張也可以)；預設是一般批次回覆(至少2張)
+async function openBatchPanel(mode) {
+  const finishMode = mode === 'finish';
   const selected = selectedTickets();
-  if (selected.length < 2) return;
+  if (finishMode ? !selected.length || finishBlockReason(selected) : selected.length < 2) return;
 
   $('ticket-list-view').classList.add('hidden');
   $('batch-bar').classList.add('hidden');
   $('batch-panel').classList.remove('hidden');
   $('batch-panel-list').textContent = selected.map((t) => `#${t.id} ${t.summary || ''}`).join('、');
-  $('batch-reply-info').value = '';
+  $('batch-panel-title').textContent = finishMode ? '批次提交：完成專案並轉品保' : '批次提交';
+  // 完成專案送品保的回覆內容仍然必填(網頁版也要寫回覆)，先帶一句可修改的預設文字
+  $('batch-reply-info').value = finishMode ? '已完成確認，送品保。' : '';
   $('batch-reply-commit-message').value = '';
   const isQcStage = !!selected[0].is_qc_stage;
   $('batch-reply-status').innerHTML = buildStatusOptionsHtml(isQcStage, selected[0].status);
+  $('batch-reply-status').disabled = finishMode; // 完成專案只有一個選項(4)，固定
   $('batch-transfer-to-label').classList.add('hidden');
   $('batch-message').textContent = '';
 
@@ -2126,6 +2367,7 @@ async function openBatchPanel() {
 }
 
 function backFromBatch() {
+  $('batch-reply-status').disabled = false;
   $('batch-panel').classList.add('hidden');
   $('ticket-list-view').classList.remove('hidden');
   refreshTicketList();
@@ -2135,7 +2377,8 @@ async function submitBatch() {
   const selected = selectedTickets();
   const info = $('batch-reply-info').value.trim();
   const status = $('batch-reply-status').value;
-  const transferTo = status === '10' ? $('batch-reply-transfer-to').value : '';
+  // 10=完成並轉品保(可選轉品保/客服)；4=已完成的單「完成專案」，後端自動轉品保
+  const transferTo = status === '10' ? $('batch-reply-transfer-to').value : status === '4' ? 'quality_assurance' : '';
   if (!info) {
     $('batch-message').textContent = '請先填寫共用回覆內容';
     return;
@@ -2442,11 +2685,14 @@ async function loadEngineers() {
 }
 
 function switchEngineer() {
+  state.projectView = null;
+  updateProjectViewUi();
   const id = Number($('engineer-select').value);
   state.viewUserId = id && id !== Number(state.currentUserId) ? id : null;
   const viewing = isViewingOtherEngineer();
   const who = viewing ? (state.engineers.find((u) => Number(u.id) === id) || {}).name : '';
   $('topbar-title').textContent = viewing ? `${who} 的工單` : '我的工單';
+  $('engineer-readonly-hint').textContent = state.canEditAnyTicket ? '檢視他人工單（專管可回覆）' : '檢視他人工單，僅供查看';
   $('engineer-readonly-hint').classList.toggle('hidden', !viewing);
   state.selectedIds.clear();
   updateBatchBar();
@@ -2456,21 +2702,60 @@ function switchEngineer() {
   refreshTicketList();
 }
 
+// 下週五的日期字串(YYYY-MM-DD)；算法跟後端 thisFridayEndOfDay 一致：本週五(週六日算已過去的那個週五)再加7天
+function nextFridayDateStr() {
+  const d = new Date();
+  const dow = d.getDay() === 0 ? 7 : d.getDay(); // 1=週一 ... 7=週日
+  d.setDate(d.getDate() + (5 - dow) + 7);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function updateRangeUi() {
+  document.querySelectorAll('#ticket-range .range-btn').forEach((el) => el.classList.toggle('active', el.dataset.range === state.ticketRange));
+  $('ticket-range-date').textContent = state.ticketRange === 'next' ? `(開始時間 ≤ ${nextFridayDateStr()})` : '';
+  $('ticket-range').classList.toggle('hidden', !!state.projectView);
+}
+
+function switchTicketRange(range) {
+  if (state.ticketRange === range) return;
+  state.ticketRange = range;
+  state.selectedIds.clear();
+  updateBatchBar();
+  updateRangeUi();
+  $('ticket-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
+  refreshTicketList();
+}
+
 async function refreshTicketList() {
+  // 專案工單檢視中：重新讀的是該專案的工單，不能被工程師待辦清單蓋掉
+  if (state.projectView) {
+    await loadProjectViewTickets();
+    return { label: '工單', count: 0 };
+  }
   const viewUserId = state.viewUserId;
-  const [tickets, timers] = await Promise.all([
-    call(window.api.eip.listTickets(null, viewUserId), (err) => {
+  const assigneeId = viewUserId || state.currentUserId;
+  const [tickets, timers, finishedRes] = await Promise.all([
+    call(window.api.eip.listTickets(state.ticketRange === 'next' ? nextFridayDateStr() : null, viewUserId), (err) => {
       if (state.viewUserId === viewUserId) $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
     }),
     call(window.api.timer.getAll()),
+    // 「已完成」(品保通過)的工單後端的待辦清單不會回傳，但流程上還要工程師回覆並設為成功，所以另外查出來一起列
+    assigneeId
+      ? call(window.api.eip.advancedSearchTickets({ assignee_id: assigneeId, status: '2', per_page: 100, order_by: 'updated_at', order_dir: 'desc' }), () => {})
+      : Promise.resolve(null),
   ]);
   if (timers) state.timers = timers;
   // 請求途中切換了工程師，這批結果已經不是畫面上要看的人，丟掉，等新的那次請求回來
   if (!tickets || state.viewUserId !== viewUserId) return { label: '工單', count: 0 };
-  state.tickets = tickets;
+  const knownIds = new Set(tickets.map((t) => String(t.id)));
+  const finished = ((finishedRes && finishedRes.items) || [])
+    .filter((t) => Number(t.status) === 2 && !knownIds.has(String(t.id)))
+    .map((t) => ({ ...t, pending_reply: true }));
+  state.tickets = tickets.concat(finished);
   // 「新工單」通知只看自己的工單；檢視別人時不動自己的快照，切回自己後下一次重整仍能正確比對出新增
   let count = 0;
-  if (!isViewingOtherEngineer()) {
+  if (!isViewingOtherEngineer() && state.ticketRange === 'week') { // 看下週範圍時清單比較長，不拿來比對「新工單」
     const ids = new Set(tickets.map((ticket) => String(ticket.id)));
     count = state.refreshSnapshot.initialized
       ? [...ids].filter((id) => !state.refreshSnapshot.ticketIds.has(id)).length
@@ -2485,6 +2770,10 @@ async function refreshTicketList() {
 
 // 尚未轉品保：6進行中/3暫停/7追蹤/10轉品保。已轉品保：2功能正常(或8=功能正常且關單，限status==4)/5功能異常
 function buildStatusOptionsHtml(isQcStage, currentStatus) {
+  // 已完成(品保第一次通過)：工程師要再回覆「完成專案」並轉品保(第二次送QC)，網頁版是 轉單=轉品保 + 任務狀態=完成專案
+  if (!isQcStage && Number(currentStatus) === 2) {
+    return '<option value="4">完成專案，轉品保(第二次送品保)</option>';
+  }
   if (isQcStage) {
     const normalOption =
       Number(currentStatus) === 4
@@ -2662,10 +2951,14 @@ async function openTicketDetail(id) {
   renderAttachments(ticket);
   renderReplies(ticket);
 
-  // 不是自己負責的工單只能查看(可能是同一個專案底下同事在跑的)，不能回覆/計時，避免誤觸動到別人的工單
+  // 不是自己負責的工單只能查看(可能是同一個專案底下同事在跑的)，不能回覆/計時，避免誤觸動到別人的工單；專管例外
   const isOwn = state.currentUserId == null || ticket.p_user_id === state.currentUserId;
+  $('not-own-notice').textContent = state.canEditAnyTicket
+    ? `這張工單不是指派給你的(負責人員：${ticket.p_user_name || '未指派'})，你是專管，可以直接回覆`
+    : '這張工單不是指派給你的，只能查看，不能回覆或計時';
   $('not-own-notice').classList.toggle('hidden', isOwn);
-  $('reply-section').classList.toggle('hidden', !isOwn);
+  $('reply-section').classList.toggle('hidden', !isOwn && !state.canEditAnyTicket);
+  $('btn-delete-ticket').classList.toggle('hidden', !state.canDeleteTicket || ticket.status === 9);
 
   // 品保審核階段不需要計時操作
   $('timer-box').classList.toggle('hidden', !!ticket.is_qc_stage);
@@ -2688,6 +2981,15 @@ async function saveProjectPath() {
     $('detail-message').textContent = '儲存路徑失敗：' + err;
   });
   $('detail-message').textContent = '已儲存這個專案的Git路徑';
+}
+
+// 刪除工單後：左側正在看這張就回清單，右側詳情正在看這張就重新讀取(顯示已刪除)，清單重新整理
+function afterTicketDeleted(ticketId) {
+  if (state.currentTicket && String(state.currentTicket.id) === String(ticketId)) backToList();
+  if (state.currentTicketSearchDetail && String(state.currentTicketSearchDetail.id) === String(ticketId)) {
+    openTicketSearchDetail(ticketId);
+  }
+  refreshTicketList();
 }
 
 function backToList() {
@@ -2975,7 +3277,7 @@ async function submitReply() {
   if (!state.currentTicket) return;
   const info = $('reply-info').value.trim();
   const status = $('reply-status').value;
-  const transferTo = status === '10' ? $('reply-transfer-to').value : '';
+  const transferTo = status === '10' ? $('reply-transfer-to').value : status === '4' ? 'quality_assurance' : '';
   if (!info) {
     $('detail-message').textContent = '請先填寫回覆內容';
     return;
@@ -3010,9 +3312,10 @@ async function submitReply() {
 
 window.api.notification.onShow(showAppNotification);
 // 獨立工單視窗按「查看案場／專案」，經main process轉過來
-window.api.window.onJump(({ target, projectId }) => {
-  if (target === 'site') jumpToInstallListByProject(projectId);
-  else if (target === 'project') jumpToProject(projectId);
+window.api.window.onJump(({ target, id }) => {
+  if (target === 'site') jumpToInstallListByProject(id);
+  else if (target === 'project') jumpToProject(id);
+  else if (target === 'reply') openTicketDetail(id);
 });
 $('btn-close-app-notification').addEventListener('click', () => $('app-notification').classList.add('hidden'));
 $('btn-settings').addEventListener('click', () => $('settings-panel').classList.toggle('hidden'));
@@ -3020,6 +3323,23 @@ $('btn-refresh').addEventListener('click', refreshAll);
 $('btn-save-settings').addEventListener('click', saveSettings);
 $('btn-test-connection').addEventListener('click', testConnection);
 $('btn-login').addEventListener('click', doLogin);
+$('btn-logout').addEventListener('click', doLogout);
+// 別台電腦改過的資料同步回來後，重新讀取有用到的畫面
+window.api.sync.onApplied(async (keys) => {
+  if (keys.includes('todos')) loadTodos();
+  if (keys.includes('project_stars')) {
+    await loadStarredProjects();
+    if (!$('project-panel').classList.contains('hidden')) runProjectSearch();
+  }
+  if (keys.includes('timers')) {
+    const timers = await call(window.api.timer.getAll());
+    if (timers) {
+      state.timers = timers;
+      renderTicketList();
+    }
+  }
+  if (keys.includes('reply_templates') && !$('settings-panel').classList.contains('hidden')) loadSettingsIntoForm();
+});
 $('btn-open-install-search').addEventListener('click', openInstallPanel);
 $('btn-install-back').addEventListener('click', closeInstallPanel);
 $('btn-install-detail-close').addEventListener('click', closeInstallDetail);
@@ -3029,7 +3349,9 @@ $('btn-project-back').addEventListener('click', closeProjectPanel);
 $('btn-project-tickets-close').addEventListener('click', closeProjectTickets);
 $('project-tickets-status-bar').addEventListener('click', (e) => {
   const chip = e.target.closest('.ticket-status-chip');
-  if (chip) toggleTicketStatusFilter(Number(chip.dataset.status));
+  if (!chip) return;
+  if (chip.dataset.preset === 'pending') togglePendingPreset();
+  else toggleTicketStatusFilter(Number(chip.dataset.status));
 });
 $('project-results').addEventListener('click', onProjectResultsClick);
 $('project-results').addEventListener('change', onProjectResultsChange);
@@ -3039,6 +3361,10 @@ $('project-search').addEventListener('input', () => {
 });
 document.querySelectorAll('.project-status-btn').forEach((el) => {
   el.addEventListener('click', () => switchProjectStatus(el.dataset.status));
+});
+$('btn-project-star-only').addEventListener('click', switchProjectStarOnly);
+document.querySelectorAll('.project-dept-btn').forEach((el) => {
+  el.addEventListener('click', () => switchProjectDept(el.dataset.dept));
 });
 $('btn-open-ticket-search').addEventListener('click', () => openTicketSearchPanel());
 $('btn-ticket-search-back').addEventListener('click', closeTicketSearchPanel);
@@ -3065,12 +3391,18 @@ $('btn-install-jump-to-project').addEventListener('click', () => {
 });
 $('btn-ts-transfer').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
-  openTransferTicketModal(state.currentTicketSearchDetail.id);
+  // 轉單後重新整理詳情，顯示轉單後的最新狀態/負責人員/回覆紀錄
+  openTransferTicketModal(state.currentTicketSearchDetail.id, (ticketId) => openTicketSearchDetail(ticketId), state.currentTicketSearchDetail.end_time);
 });
-$('btn-transfer-ticket-close').addEventListener('click', closeTransferTicketModal);
-$('btn-transfer-ticket-submit').addEventListener('click', submitTransferTicket);
-$('transfer-ticket-backdrop').addEventListener('click', (e) => {
-  if (e.target === e.currentTarget) closeTransferTicketModal();
+bindTransferTicketModal();
+$('btn-ts-reply').addEventListener('click', () => {
+  if (state.currentTicketSearchDetail) openTicketDetail(state.currentTicketSearchDetail.id);
+});
+$('btn-ts-delete').addEventListener('click', () => {
+  if (state.currentTicketSearchDetail) openDeleteTicketDialog(state.currentTicketSearchDetail, afterTicketDeleted);
+});
+$('btn-delete-ticket').addEventListener('click', () => {
+  if (state.currentTicket) openDeleteTicketDialog(state.currentTicket, afterTicketDeleted);
 });
 $('ticket-search-query').addEventListener('input', () => {
   clearTimeout(ticketSearchTimer);
@@ -3177,6 +3509,15 @@ $('ticket-search').addEventListener('input', () => {
   renderTicketList();
 });
 $('engineer-select').addEventListener('change', switchEngineer);
+document.querySelectorAll('#ticket-range .range-btn').forEach((el) => {
+  el.addEventListener('click', () => switchTicketRange(el.dataset.range));
+});
+$('btn-project-tickets-to-left').addEventListener('click', sendProjectTicketsToLeft);
+$('btn-project-view-exit').addEventListener('click', exitProjectView);
+$('btn-project-view-reload').addEventListener('click', () => {
+  $('ticket-list').innerHTML = '<p style="color:#888;">讀取中...</p>';
+  loadProjectViewTickets();
+});
 document.querySelectorAll('.tab-btn').forEach((el) => {
   el.addEventListener('click', () => switchTab(el.dataset.tab));
 });
@@ -3185,8 +3526,18 @@ $('reply-status').addEventListener('change', () => {
   $('reply-transfer-to-label').classList.toggle('hidden', $('reply-status').value !== '10');
 });
 
-$('btn-batch-open').addEventListener('click', openBatchPanel);
+$('btn-batch-open').addEventListener('click', () => openBatchPanel());
+$('btn-batch-finish').addEventListener('click', () => openBatchPanel('finish'));
 $('btn-batch-clear').addEventListener('click', clearSelection);
+$('btn-batch-select-all').addEventListener('click', selectAllVisibleTickets);
+$('btn-batch-transfer').addEventListener('click', () => {
+  const ids = selectedTickets().map((t) => t.id);
+  if (ids.length) openTransferTicketModal(ids, afterBatchTicketAction);
+});
+$('btn-batch-delete').addEventListener('click', () => {
+  const tickets = selectedTickets();
+  if (tickets.length) openDeleteTicketDialog(tickets, afterBatchTicketAction);
+});
 $('btn-batch-back').addEventListener('click', backFromBatch);
 $('btn-batch-submit').addEventListener('click', submitBatch);
 $('batch-reply-status').addEventListener('change', () => {
@@ -3255,6 +3606,8 @@ function tickAutoRefresh() {
   if (whoamiResult) {
     state.currentUserId = whoamiResult.id;
     state.canTransferTicket = !!whoamiResult.can_transfer_ticket;
+    state.canEditAnyTicket = !!whoamiResult.can_edit_any_ticket;
+    state.canDeleteTicket = !!whoamiResult.can_delete_ticket;
     versionPermission.canAdd = !!whoamiResult.can_add_version;
   }
   await Promise.all([refreshAll(), loadTodos(), loadEngineers()]);

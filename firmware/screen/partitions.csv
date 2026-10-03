@@ -1,0 +1,10 @@
+# reTerminal E1002 實際有 32MB Flash(官方板子設定只認 8MB)，編譯時要加 --build-property build.flash_size=32MB
+# app0/app1 各 4MB(兩份輪流用，之後可以無線更新固件)，其餘約 24MB 給 LittleFS 放字型等系統資源
+# (字型不放 TF 卡：TF 卡跟螢幕共用 SPI，隨機讀取容易出錯，一出錯整張卡就讀不到)
+# Name,     Type, SubType,  Offset,    Size
+nvs,        data, nvs,      0x9000,    0x5000
+otadata,    data, ota,      0xe000,    0x2000
+app0,       app,  ota_0,    0x10000,   0x400000
+app1,       app,  ota_1,    0x410000,  0x400000
+spiffs,     data, spiffs,   0x810000,  0x17E0000
+coredump,   data, coredump, 0x1FF0000, 0x10000

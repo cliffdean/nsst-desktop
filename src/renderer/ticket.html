@@ -12,6 +12,9 @@
       <button id="btn-tw-copy-id" type="button">複製工單號</button>
       <button id="btn-tw-jump-to-site" type="button" class="hidden" title="在主視窗查看這個專案的案場／裝機單資訊">查看裝機單</button>
       <button id="btn-tw-jump-to-project" type="button" class="hidden" title="在主視窗的專案查詢裡查看這個專案">查看專案</button>
+      <button id="btn-tw-transfer" type="button" class="hidden" title="把工單改指派給別的工程師">轉單</button>
+      <button id="btn-tw-reply" type="button" class="hidden" title="在主視窗左側開啟這張工單的回覆畫面">回覆</button>
+      <button id="btn-tw-delete" type="button" class="hidden btn-danger" title="刪除這張工單(僅限專管)">刪除工單</button>
       <button id="btn-tw-reload" type="button" title="重新讀取這張工單">重新整理</button>
     </div>
   </header>
@@ -41,6 +44,29 @@
         <img id="image-preview-img" alt="">
         <video id="image-preview-video" controls class="hidden"></video>
       </div>
+    </div>
+  </div>
+
+  <div id="transfer-ticket-backdrop" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>轉單</h2>
+        <button id="btn-transfer-ticket-close">✕</button>
+      </div>
+      <p class="meta">轉單後工單狀態會變回「已指派」，請簡述轉單原因，這則說明會記錄在工單回覆裡。</p>
+      <label>轉單對象(工程部在職人員)
+        <select id="transfer-ticket-target"></select>
+      </label>
+      <label>結束日期(選填，不改就留原值；批次轉單時留空=各張維持原本的結束日期)
+        <input type="datetime-local" id="transfer-ticket-end-time" />
+      </label>
+      <label>轉單說明(必填)
+        <textarea id="transfer-ticket-info" rows="4" placeholder="請說明轉單原因..."></textarea>
+      </label>
+      <div class="actions">
+        <button id="btn-transfer-ticket-submit">確認轉單</button>
+      </div>
+      <p id="transfer-ticket-message" class="meta"></p>
     </div>
   </div>
 

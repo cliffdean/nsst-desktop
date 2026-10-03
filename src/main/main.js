@@ -1,8 +1,8 @@
-const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, clipboard, shell, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, clipboard, shell, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-const { settingsStore, ticketMetaStore, todoStore, projectStarStore } = require('./store');
+const { settingsStore, ticketMetaStore, todoStore, projectStarStore, SCREEN_DEFAULTS } = require('./store');
 const eipApi = require('./eipApi');
 const timerService = require('./timerService');
 const gitService = require('./gitService');
@@ -10,6 +10,8 @@ const llmService = require('./llmService');
 const mailService = require('./mailService');
 const calendarService = require('./calendarService');
 const siteService = require('./siteService');
+const syncService = require('./syncService');
+const screenService = require('./screenService');
 
 let mainWindow = null;
 let tray = null;
@@ -236,10 +238,62 @@ app.whenReady().then(() => {
   createTray();
   registerHotkey(settingsStore.get('hotkey'));
   getTodos().forEach(scheduleTodoReminder);
+  syncService.init(onSyncApplied);
+  syncNow();
+  setInterval(syncNow, SYNC_INTERVAL_MS);
+  // 登入取得新Token(或手動貼上Token)後馬上同步一次，把這個帳號的資料拉回來
+  settingsStore.onDidChange('apiToken', (token) => {
+    if (token) syncNow();
+    screenService.apply();
+  });
+  // 電子紙看板(擴展功能)：沒開啟時什麼都不做；狀態變化通知所有視窗更新畫面
+  screenService.init(() => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) win.webContents.send('screen:changed');
+    });
+  });
 });
+
+// ---- 個人資料同步(待辦/計時/工單類型標記/加星/回覆範本存到EIP後端，多台電腦共用) ----
+const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+let syncing = null;
+
+async function syncNow() {
+  if (!settingsStore.get('apiToken')) return { ok: false, reason: 'not-logged-in' };
+  if (syncing) return syncing; // 同一時間只跑一次，重複呼叫共用同一個結果
+  syncing = (async () => {
+    try {
+      const me = await eipApi.whoami();
+      return await syncService.pull(me.id);
+    } catch (err) {
+      console.warn('同步個人資料失敗：', err.message);
+      return { ok: false, reason: err.message };
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+
+function clearTodoReminders() {
+  todoReminderTimers.forEach((t) => clearTimeout(t));
+  todoReminderTimers.clear();
+}
+
+// 後端拉回來的資料套用到本機後：待辦提醒照新資料重排，通知所有視窗重新讀取
+function onSyncApplied(keys) {
+  if (keys.includes('todos')) {
+    clearTodoReminders();
+    getTodos().forEach(scheduleTodoReminder);
+  }
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) win.webContents.send('sync:applied', keys);
+  });
+}
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  screenService.shutdown();
 });
 
 app.on('window-all-closed', () => {
@@ -259,7 +313,8 @@ function handle(channel, fn) {
   });
 }
 
-handle('settings:get', () => settingsStore.store);
+// screen 欄位跟預設值合併(舊版設定檔可能缺新欄位)，畫面才不會讀到 undefined
+handle('settings:get', () => ({ ...settingsStore.store, screen: { ...SCREEN_DEFAULTS, ...settingsStore.get('screen') } }));
 handle('settings:save', (patch) => {
   // 快捷鍵要先確認真的能註冊成功才寫入設定檔，避免存了一個註冊失敗的值，
   // 導致下次開機時舊的、原本能用的快捷鍵也一起消失(變成完全沒有快捷鍵可用)
@@ -278,6 +333,36 @@ handle('settings:save', (patch) => {
 });
 
 handle('settings:get-active-hotkey', () => currentHotkey);
+
+// ---- 電子紙看板(擴展功能) ----
+// 設定只存「有給的欄位」並套用：不跟一般設定一起整包存，避免蓋掉其他欄位；密碼不能由畫面改成空字串
+handle('screen:save-config', async (patch) => {
+  const cur = { ...SCREEN_DEFAULTS, ...settingsStore.get('screen') };
+  const next = { ...cur, ...patch };
+  next.mqttPort = Math.min(65535, Math.max(1024, parseInt(next.mqttPort, 10) || 1883));
+  next.refreshMin = Math.max(1, parseInt(next.refreshMin, 10) || 10);
+  next.wakeMin = Math.max(1, parseInt(next.wakeMin, 10) || 30);
+  next.offWakeMin = Math.max(0, parseInt(next.offWakeMin, 10) || 0);
+  next.lowBatteryPct = Math.min(90, Math.max(0, parseInt(next.lowBatteryPct, 10) || 0));
+  next.clearOfflineMin = Math.max(0, parseInt(next.clearOfflineMin, 10) || 0);
+  delete next.clearOfflineHours; // 舊版單位是小時，已改成分鐘
+  next.todoRange = ['week', 'next', 'all'].includes(next.todoRange) ? next.todoRange : 'week';
+  delete next.todoThisWeekOnly; // 舊版的勾選，已改成 todoRange
+  next.engineerReviewIncludeSuccess = !!next.engineerReviewIncludeSuccess;
+  next.tzHours = parseInt(next.tzHours, 10) || 0;
+  if (!['smart', 'periodic', 'always_on'].includes(next.powerMode)) next.powerMode = 'smart';
+  next.deviceId = String(next.deviceId || 'e1002').replace(/[^A-Za-z0-9_-]/g, '') || 'e1002';
+  if (!next.mqttPassword) next.mqttPassword = cur.mqttPassword;
+  settingsStore.set('screen', next);
+  await screenService.apply();
+  return screenService.status();
+});
+handle('screen:status', () => screenService.status());
+handle('screen:refresh', (override) => screenService.refresh({ force: true, override }));
+handle('screen:preview', (override) => screenService.preview(override));
+handle('screen:command', (name) => screenService.sendCommand(name));
+handle('screen:probe', (ip) => screenService.probe(ip));
+handle('screen:provision', (ip, override) => screenService.provision(ip, override));
 
 handle('ticket-meta:get-type', (ticketId) => ticketMetaStore.get(String(ticketId), ''));
 handle('ticket-meta:set-type', (ticketId, type) => {
@@ -361,13 +446,35 @@ handle('settings:set-project-path', (projectId, localPath) => {
   return projectPaths;
 });
 
-handle('eip:whoami', () => eipApi.whoami());
-handle('eip:login', (username, password) => eipApi.login(username, password));
+handle('eip:whoami', (override) => eipApi.whoami(override));
+handle('sync:now', () => syncNow());
+
+// 一鍵退出(共用電腦用)：先把還沒同步的個人資料推到後端，再清掉本機的帳密與個人資料、瀏覽器快取
+// force=false時若有資料推不上去(例如離線)，先回報給畫面讓使用者決定要不要放棄這些資料強制退出
+handle('auth:logout', async (force) => {
+  const unsynced = await syncService.flush();
+  if (unsynced.length && !force) return { ok: false, unsynced };
+
+  syncService.clearLocal();
+  clearTodoReminders();
+  const mail = settingsStore.get('mail') || {};
+  const llm = settingsStore.get('llm') || {};
+  settingsStore.set('apiToken', '');
+  settingsStore.set('mail', { ...mail, username: '', password: '' });
+  // LLM：本機Ollama不需要真的金鑰(預設就是'ollama')，其他供應商的API Key清掉
+  settingsStore.set('llm', { ...llm, apiKey: llm.provider === 'ollama' ? 'ollama' : '' });
+
+  ticketWindows.forEach((win) => { if (!win.isDestroyed()) win.close(); });
+  await session.defaultSession.clearStorageData();
+  await session.defaultSession.clearCache();
+  return { ok: true };
+});
+handle('eip:login', (username, password, override) => eipApi.login(username, password, override));
 handle('eip:search-install-lists', (q) => eipApi.searchInstallLists(q));
 handle('eip:get-install-list-by-project', (projectId) => eipApi.getInstallListByProject(projectId));
 handle('eip:get-install-list', (id, ticketsBeforeId) => eipApi.getInstallList(id, ticketsBeforeId));
 handle('eip:list-engineers', () => eipApi.listEngineers());
-handle('eip:list-projects', (q, status) => eipApi.listProjects(q, status));
+handle('eip:list-projects', (q, status, dept) => eipApi.listProjects(q, status, dept));
 handle('eip:project-dept-transfer', (projectId, dept) => eipApi.projectDeptTransfer(projectId, dept));
 handle('eip:project-payment-update', (projectId, period, status) => eipApi.projectPaymentUpdate(projectId, period, status));
 handle('eip:project-payment-percent-save', (projectId, percents) => eipApi.projectPaymentPercentSave(projectId, percents));
@@ -377,8 +484,9 @@ handle('eip:advanced-search-tickets', (filters) => eipApi.advancedSearchTickets(
 handle('eip:get-ticket-search-options', () => eipApi.getTicketSearchOptions());
 handle('eip:get-ticket', (id) => eipApi.getTicket(id));
 handle('eip:reply-ticket', (id, payload) => eipApi.replyTicket(id, payload));
-handle('eip:transfer-ticket', (id, info, chgUserId) => eipApi.transferTicket(id, info, chgUserId));
+handle('eip:transfer-ticket', (id, info, chgUserId, endTime) => eipApi.transferTicket(id, info, chgUserId, endTime));
 handle('eip:update-ticket-version', (id, version) => eipApi.updateTicketVersion(id, version));
+handle('eip:delete-ticket', (id, reason) => eipApi.deleteTicket(id, reason));
 handle('eip:add-ticket-version', (name) => eipApi.addTicketVersion(name));
 handle('eip:upload-file', (filePath) => eipApi.uploadFile(filePath));
 handle('eip:attach-file', (id, fileId) => eipApi.attachFile(id, fileId));
@@ -428,7 +536,7 @@ handle('git:commit',(projectId, message) => gitService.commitAll(projectId, mess
 handle('llm:generate-reply', (params) => llmService.generateTicketReply(params));
 handle('llm:generate-batch-reply', (params) => llmService.generateBatchReply(params));
 
-handle('mail:list-recent', (limit) => mailService.listRecent(limit));
+handle('mail:list-recent', (limit, override) => mailService.listRecent(limit, override));
 handle('mail:get-message', (uid) => mailService.getMessage(uid));
 handle('mail:save-attachment', async (uid, index) => {
   const { dialog } = require('electron');
@@ -459,13 +567,14 @@ handle('clipboard:copy', (text) => {
 handle('shell:open-external', (url) => shell.openExternal(url));
 
 handle('window:open-ticket', (ticketId) => openTicketWindow(ticketId));
-// 獨立工單視窗按「查看案場/專案」：把主視窗叫到前面，交給主視窗切到裝機單/專案查詢，target: 'site' | 'project'
-handle('window:jump-in-main', (target, projectId) => {
+// 獨立工單視窗按「查看案場/專案/回覆」：把主視窗叫到前面，交給主視窗切換畫面
+// target: 'site' | 'project'(id=專案id) | 'reply'(id=工單id，在左側開工單詳情回覆)
+handle('window:jump-in-main', (target, id) => {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
-  mainWindow.webContents.send('window:jump', { target, projectId });
+  mainWindow.webContents.send('window:jump', { target, id });
   return true;
 });
 
