@@ -118,8 +118,10 @@ async function pull(userId) {
       applied.push(key);
       await push(key);
     } else if (hasRemote) {
+      // 內容沒變就不通知畫面：定時同步每次都通知的話，專案查詢會被反覆重跑、列表突然重整
+      const changed = JSON.stringify(local) !== JSON.stringify(data[key]);
       withoutPush(() => entries[key].set(data[key]));
-      applied.push(key);
+      if (changed) applied.push(key);
     } else if (hasContent(local)) {
       await push(key);
     }
