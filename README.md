@@ -86,8 +86,11 @@ ESP32 Core 曾嘗試升級到 3.3.x，但會連帶下載用不到的 RISC-V 工�
 ```powershell
 # 1. 手動：到 https://github.com/arduino/arduino-cli/releases 下載 Windows 64bit zip，解壓到 D:\MyTools\tools\arduino-cli
 #    (另外要有 git、Python)
-# 2. 之後一行搞定：安裝 ESP32 Core 3.1.1 + Seeed_GFX、OpenFontRender、ArduinoJson、PubSubClient
+# 2. 之後一行搞定：安裝 ESP32 Core 3.1.1 + Seeed_GFX、OpenFontRender、ArduinoJson 7.4.3、PubSubClient
 .\firmware\setup-env.ps1
+# 3. 編 screen 固件前先複製開發用設定(secrets.h 不進 git)：
+#    copy firmware\screen\secrets.example.h firmware\screen\secrets.h
+# 4. 產生中文字型(只需做一次，見第三節)：python -m pip install fonttools opencc; python firmware\fonts\make_fonts.py
 ```
 
 ### 每個 sketch 的必要設定
@@ -219,7 +222,7 @@ EIP 後端 --(既有API)--> 桌面工具 screenService ──MQTT(內建伺服�
 .\firmware\screen\flash.ps1 -Port COM5       # 換序列埠(預設 COM23)
 ```
 
-需要的函式庫：Seeed_GFX、OpenFontRender(GitHub takkaO/OpenFontRender)、ArduinoJson 7、PubSubClient。字型用 `firmware/fonts/make_fonts.py` 產生，再用腳本經屏幕的 `/fetch` 讓屏幕自己從這台電腦下載到 `flash:/fonts/`(屏幕與電腦要在同一個區網；腳本會暫時開 8765 埠的 HTTP 伺服器，傳完自動關閉)：
+需要的函式庫：Seeed_GFX、OpenFontRender(GitHub takkaO/OpenFontRender)、ArduinoJson 7.4.3(`@7` 會裝到有編譯錯誤的 7.0.0，要指定版本)、PubSubClient。字型用 `firmware/fonts/make_fonts.py` 產生，再用腳本經屏幕的 `/fetch` 讓屏幕自己從這台電腦下載到 `flash:/fonts/`(屏幕與電腦要在同一個區網；腳本會暫時開 8765 埠的 HTTP 伺服器，傳完自動關閉)：
 
 ```powershell
 python firmware\fonts\make_fonts.py     # 產生字型(只需要做一次)
