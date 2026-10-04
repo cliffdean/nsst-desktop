@@ -17,5 +17,6 @@ foreach ($r in @(
     @('OpenFontRender', 'https://github.com/takkaO/OpenFontRender.git'))) {
   if (-not (Test-Path (Join-Path $libs $r[0]))) { git clone --depth 1 $r[1] (Join-Path $libs $r[0]) }
 }
-& $Cli lib install 'ArduinoJson@7' 'PubSubClient'
+# ArduinoJson 要指定 7.4.3：`@7` 會解析到 7.0.0，該版標頭有編譯錯誤(JsonObjectConst.hpp no matching function)
+& $Cli lib install 'ArduinoJson@7.4.3' 'PubSubClient'
 Write-Host "完成。函式庫資料夾：$libs" -ForegroundColor Green
