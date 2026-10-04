@@ -3,7 +3,7 @@
 #include "display.h"
 #include "fonts.h"
 
-// 版面(800x480)：頂部黑色標題列+三個重點數字、左欄工程師、右欄本週追蹤專案、底部狀態列
+// 版面(800x480)：頂部黑色標題列+三個重點數字、左欄上半工程師/下半待辦、右欄本週追蹤專案、底部狀態列
 // 配色原則(電子紙只有6色)：紅=待處理(要動手)、藍=待審核、黃底=逾期警示、綠=已清空，其餘黑白
 static const int HEADER_H = 50;
 static const int BODY_TOP = 58;
@@ -14,7 +14,8 @@ static const int LEFT_R = 316;
 static const int DIVIDER_X = 326;
 static const int RIGHT_X = 338;
 static const int RIGHT_R = 788;
-static const int ENG_PER_PAGE = 14; // 工程師超過這個數就分頁
+static const int ENG_PER_PAGE = 10; // 工程師超過這個數就分頁
+static const int TODO_Y = 316;      // 待辦區起點：BODY_BOTTOM - (標題36 + 4筆*24)，固定位置
 
 // 圓角色塊：label一般字、value粗體；x為左上角，回傳寬度
 static int pill(int x, int cy, int h, const String &label, const String &value, uint16_t bg, uint16_t fg, int labelSize,
@@ -40,7 +41,7 @@ static void dottedHLine(int x0, int x1, int y) {
   for (int x = x0; x <= x1; x += 4) epaper.drawFastHLine(x, y, 2, TFT_BLACK);
 }
 
-static void drawHeader(JsonObjectConst root) {
+static void drawHeader(JsonObjectConst root, const DeviceStatus &st) {
   epaper.fillRect(0, 0, SCREEN_W, HEADER_H, TFT_BLACK);
   String title = root["title"] | "工單看板";
   int x = 14;
@@ -55,7 +56,14 @@ static void drawHeader(JsonObjectConst root) {
   if (overdue > 0) pill(x, HEADER_H / 2, 36, "逾期", String(overdue), TFT_YELLOW, TFT_BLACK, 16, 24);
 
   String updated = root["updated_at"] | "";
-  if (updated.length()) textDraw("更新 " + updated, SCREEN_W - 14, HEADER_H / 2, 16, TFT_WHITE, TFT_BLACK, FontWeight::Regular, TextAlign::Right);
+  int right = SCREEN_W - 14;
+  if (updated.length()) {
+    String u = "更新 " + updated;
+    textDraw(u, right, HEADER_H / 2, 16, TFT_WHITE, TFT_BLACK, FontWeight::Regular, TextAlign::Right);
+    right -= textWidth(u, 16) + 16;
+  }
+  // 省電模式(不保持連線)才有下次同步時間，放在「更新」左側
+  if (st.nextSync.length()) textDraw("下次同步 " + st.nextSync, right, HEADER_H / 2, 16, TFT_WHITE, TFT_BLACK, FontWeight::Regular, TextAlign::Right);
 }
 
 static void legend(int right, int cy) {
@@ -80,6 +88,8 @@ static int enginePages(JsonArrayConst engineers) {
   return max(1, ((int)engineers.size() + ENG_PER_PAGE - 1) / ENG_PER_PAGE);
 }
 
+// 左欄上半：工程師，單欄一人一列(名字+待處理+待審核+逾期數量，逾期用黃底色塊)。
+// 工程師最多約10位，所以待辦區固定貼在左欄底部(TODO_Y)，不隨工程師人數上下移動
 static void drawEngineers(JsonArrayConst engineers, int page) {
   int total = engineers.size();
   int pages = enginePages(engineers);
@@ -87,49 +97,71 @@ static void drawEngineers(JsonArrayConst engineers, int page) {
            FontWeight::Bold);
   legend(LEFT_R, 72);
 
+  const int top = 90;
   if (total == 0) {
     textDraw("沒有工程師資料", LEFT_X, 110, 16, TFT_BLACK, TFT_WHITE);
     return;
   }
-  int maxLoad = 1;
-  for (JsonObjectConst e : engineers) maxLoad = max(maxLoad, (int)(e["todo"] | 0) + (int)(e["review"] | 0));
-
-  // 超過一頁時每頁固定 ENG_PER_PAGE 位；這一頁沒有工程師(專案頁比較多)就留白
   int first = pages > 1 ? page * ENG_PER_PAGE : 0;
   int n = pages > 1 ? min(ENG_PER_PAGE, total - first) : total;
-  if (n <= 0) return;
-  const int top = 90;
-  int rowH = constrain((BODY_BOTTOM - top) / (pages > 1 ? ENG_PER_PAGE : n), 22, 36);
-  int nameSize = rowH >= 30 ? 18 : 16;
-  int numSize = rowH >= 30 ? 20 : 17;
-  const int nameW = 70;
-  const int barX = LEFT_X + nameW + 6;
-  const int barMaxW = 100;
-  const int overdueX = barX + barMaxW + 8; // 「逾」色塊固定一欄，上下對齊
-  int shown = min(n, (BODY_BOTTOM - top) / rowH);
+  // 人少時列高放寬一點(上限30)，滿10位時剛好填滿 top ~ TODO_Y 之間
+  int rowH = constrain((TODO_Y - 4 - top) / max(n, 1), 22, 30);
+  const int nameW = 76;              // 名字欄(4個中文字寬)，有逾期的名字底色用黃色
+  const int todoR = LEFT_X + 118;    // 待處理數字右緣
+  const int reviewR = LEFT_X + 178;  // 待審核數字右緣
+  const int overdueX = LEFT_X + 220; // 逾期色塊左緣，跟待審核數字之間留足間距
 
-  for (int i = 0; i < shown; i++) {
+  for (int i = 0; i < n; i++) {
     JsonObjectConst e = engineers[first + i];
     int todo = e["todo"] | 0;
     int review = e["review"] | 0;
     int overdue = e["overdue"] | 0;
     int cy = top + rowH * i + rowH / 2;
 
-    if (overdue > 0) epaper.fillRoundRect(LEFT_X - 4, cy - rowH / 2 + 2, nameW + 6, rowH - 4, 4, TFT_YELLOW);
-    textDraw(e["name"] | "", LEFT_X, cy, nameSize, TFT_BLACK, overdue > 0 ? TFT_YELLOW : TFT_WHITE, FontWeight::Regular,
-             TextAlign::Left, nameW);
-
-    int barH = rowH >= 30 ? 14 : 10;
-    int tw = todo * barMaxW / maxLoad;
-    int rw = review * barMaxW / maxLoad;
-    if (tw) epaper.fillRect(barX, cy - barH / 2, tw, barH, TFT_RED);
-    if (rw) epaper.fillRect(barX + tw, cy - barH / 2, rw, barH, TFT_BLUE);
+    if (overdue > 0) epaper.fillRoundRect(LEFT_X - 4, cy - rowH / 2 + 1, nameW + 8, rowH - 2, 4, TFT_YELLOW);
+    textDraw(e["name"] | "", LEFT_X, cy, 17, TFT_BLACK, overdue > 0 ? TFT_YELLOW : TFT_WHITE, FontWeight::Regular, TextAlign::Left, nameW);
+    count(todo, todoR, cy, 18, TFT_RED);
+    count(review, reviewR, cy, 18, TFT_BLUE);
+    // 逾期數量：黃底小色塊，沒有逾期就留白
     if (overdue > 0) {
-      pill(overdueX, cy, barH + 8, "逾", String(overdue), TFT_YELLOW, TFT_BLACK, 13, 14);
+      String o = String(overdue);
+      int w = max(26, textWidth(o, 15, FontWeight::Bold) + 14);
+      epaper.fillRoundRect(overdueX, cy - 10, w, 20, 4, TFT_YELLOW);
+      textDraw(o, overdueX + w / 2, cy, 15, TFT_BLACK, TFT_YELLOW, FontWeight::Bold, TextAlign::Center);
     }
+  }
+}
 
-    count(todo, LEFT_R - 40, cy, numSize, TFT_RED);
-    count(review, LEFT_R, cy, numSize, TFT_BLUE);
+// 左欄下半：待辦事項(桌面工具的待辦，置頂的排前面)；從y開始往下畫到 BODY_BOTTOM，放不下的以「還有N項」收尾
+static void drawTodos(JsonArrayConst todos, int y) {
+  dottedHLine(LEFT_X, LEFT_R, y + 4);
+  int total = todos.size();
+  textDraw("待辦事項", LEFT_X, y + 20, 18, TFT_BLACK, TFT_WHITE, FontWeight::Bold);
+  if (total > 0) textDraw(String(total) + " 項", LEFT_R, y + 20, 14, TFT_BLACK, TFT_WHITE, FontWeight::Regular, TextAlign::Right);
+
+  const int rowH = 24;
+  int itemsTop = y + 36;
+  if (total == 0) {
+    textDraw("目前沒有待辦事項", LEFT_X, itemsTop + rowH / 2, 16, TFT_BLACK, TFT_WHITE);
+    return;
+  }
+  int fit = (BODY_BOTTOM - itemsTop) / rowH;
+  if (fit <= 0) return;
+  int shown = total <= fit ? total : fit - 1; // 放不下時最後一行留給「還有N項」
+  for (int i = 0; i < shown; i++) {
+    JsonObjectConst t = todos[i];
+    int cy = itemsTop + rowH * i + rowH / 2;
+    bool overdue = t["overdue"] | false;
+    // 前面的小方塊：置頂=紅色實心，其餘=空心框
+    if (t["pinned"] | false) epaper.fillRect(LEFT_X, cy - 5, 10, 10, TFT_RED);
+    else epaper.drawRect(LEFT_X, cy - 5, 10, 10, TFT_BLACK);
+    String remind = t["remind"] | "";
+    int remindW = remind.length() ? textWidth(remind, 13) + 6 : 0;
+    textDraw(t["title"] | "", LEFT_X + 18, cy, 16, TFT_BLACK, TFT_WHITE, FontWeight::Regular, TextAlign::Left, LEFT_R - LEFT_X - 18 - remindW);
+    if (remind.length()) textDraw(remind, LEFT_R, cy, 13, overdue ? TFT_RED : TFT_BLACK, TFT_WHITE, overdue ? FontWeight::Bold : FontWeight::Regular, TextAlign::Right);
+  }
+  if (shown < total) {
+    textDraw("…還有 " + String(total - shown) + " 項", LEFT_X, itemsTop + rowH * shown + rowH / 2, 14, TFT_BLACK, TFT_WHITE);
   }
 }
 
@@ -281,7 +313,6 @@ static void drawFooter(const DeviceStatus &st, int page = 0, int pages = 1) {
   if (pages > 1) center += String(center.length() ? "　" : "") + "短按綠鍵翻頁 " + String(page + 1) + "/" + String(pages);
   if (center.length()) textDraw(center, SCREEN_W / 2, cy, 14, TFT_BLACK, TFT_WHITE, FontWeight::Regular, TextAlign::Center, 420);
   if (st.ip.length()) textDraw("IP " + st.ip, SCREEN_W - 12, cy, 14, TFT_BLACK, TFT_WHITE, FontWeight::Regular, TextAlign::Right);
-  else if (st.nextSync.length()) textDraw("下次同步 " + st.nextSync, SCREEN_W - 12, cy, 14, TFT_BLACK, TFT_WHITE, FontWeight::Regular, TextAlign::Right);
 }
 
 static void drawWaiting(const DeviceStatus &st) {
@@ -306,9 +337,10 @@ int dashboardRender(const JsonDocument *doc, const DeviceStatus &status, int pag
   JsonObjectConst root = doc->as<JsonObjectConst>();
   int pages = max(enginePages(root["engineers"]), projectPages(root["projects"]));
   page = constrain(page, 0, pages - 1);
-  drawHeader(root);
+  drawHeader(root, status);
   epaper.drawFastVLine(DIVIDER_X, BODY_TOP, BODY_BOTTOM - BODY_TOP, TFT_BLACK);
   drawEngineers(root["engineers"], page);
+  drawTodos(root["todos"], TODO_Y);
   drawProjects(root["projects"], page, pages);
   drawFooter(status, page, pages);
   return pages;

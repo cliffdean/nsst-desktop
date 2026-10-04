@@ -224,11 +224,14 @@ static void drawNow(bool dry = false, int pageOverride = -1) {
       st.humidity = h;
     }
     st.note = statusNote();
-    if (plan.stayOnline) {
-      if (netWifiConnected()) st.ip = WiFi.localIP().toString();
+    // IP一律顯示：連著就取現值並記下來，省電模式畫圖時WiFi可能已斷，用上次記的
+    if (netWifiConnected()) {
+      st.ip = WiFi.localIP().toString();
+      prefs.putString("lastIp", st.ip);
     } else {
-      st.nextSync = powerWakeText(plan.sleepSeconds);
+      st.ip = prefs.getString("lastIp", "");
     }
+    if (!plan.stayOnline) st.nextSync = powerWakeText(plan.sleepSeconds);
     int page = pageOverride >= 0 ? pageOverride : currentPage();
     int pages = dashboardRender(has ? &doc : nullptr, st, page);
     lastPageCount = pages;

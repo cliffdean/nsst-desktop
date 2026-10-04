@@ -99,4 +99,7 @@ const projectStarStore = new Store({ name: 'project-stars', defaults: {} });
 // 電子紙看板的執行狀態(不同步到後端)：最後一份儀表板數據(MQTT保留訊息重啟後要還原)、屏幕最後回報的狀態
 const screenStore = new Store({ name: 'screen-state', defaults: {} });
 
-module.exports = { settingsStore, timersStore, ticketMetaStore, todoStore, projectStarStore, screenStore, SCREEN_DEFAULTS };
+// 待辦最多幾筆可以推到電子紙(版面只放得下這麼多，也避免把工程師區擠掉)
+const SCREEN_TODO_LIMIT = 4;
+
+module.exports = { SCREEN_TODO_LIMIT, settingsStore, timersStore, ticketMetaStore, todoStore, projectStarStore, screenStore, SCREEN_DEFAULTS };

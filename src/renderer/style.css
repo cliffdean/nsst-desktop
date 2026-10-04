@@ -303,6 +303,8 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .todo-item.pinned .todo-title { font-weight: 700; }
 .todo-item.completed .todo-title { color: #999; text-decoration: line-through; }
 .todo-title { flex: 1; min-width: 0; word-break: break-word; }
+.todo-screen-input { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: 11px; color: #666; }
+.todo-screen-input input { width: auto; margin: 0; }
 .todo-due { color: #888; font-size: 11px; white-space: nowrap; }
 .todo-actions { display: flex; gap: 2px; }
 .todo-actions button { padding: 2px 5px; font-size: 11px; }

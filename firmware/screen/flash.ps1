@@ -28,3 +28,5 @@ if ($Full) {
 }
 if ($LASTEXITCODE -ne 0) { throw '燒錄失敗(序列埠被佔用？板子有接 USB？電源開關在 ON？)' }
 Write-Host '完成，屏幕已重開機' -ForegroundColor Green
+
+Set-Location $PSScriptRoot\..\..

@@ -2,7 +2,7 @@ const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, clipboard, shel
 const path = require('path');
 const fs = require('fs');
 
-const { settingsStore, ticketMetaStore, todoStore, projectStarStore, SCREEN_DEFAULTS } = require('./store');
+const { settingsStore, ticketMetaStore, todoStore, projectStarStore, SCREEN_DEFAULTS, SCREEN_TODO_LIMIT } = require('./store');
 const eipApi = require('./eipApi');
 const timerService = require('./timerService');
 const gitService = require('./gitService');
@@ -406,11 +406,17 @@ handle('todo:save', (todo) => {
     title: String(todo.title || '').trim(),
     reminderAt: todo.reminderAt || '',
     pinned: !!todo.pinned,
+    // 沒帶onScreen(例如編輯表單)就沿用原值，不要被編輯動作清掉
+    onScreen: todo.onScreen === undefined ? !!(existing && existing.onScreen) : !!todo.onScreen,
     completed,
     completedAt,
     updatedAt: new Date().toISOString(),
   };
   if (!normalized.title) throw new Error('待辦事項內容不可為空');
+  if (normalized.onScreen && !normalized.completed && !(existing && existing.onScreen && !existing.completed)) {
+    const used = todos.filter((item) => item.id !== id && item.onScreen && !item.completed).length;
+    if (used >= SCREEN_TODO_LIMIT) throw new Error(`最多只能有 ${SCREEN_TODO_LIMIT} 筆待辦顯示在屏幕上，請先取消其他筆的勾選`);
+  }
   const index = todos.findIndex((item) => item.id === normalized.id);
   if (index >= 0) todos[index] = normalized;
   else todos.push(normalized);

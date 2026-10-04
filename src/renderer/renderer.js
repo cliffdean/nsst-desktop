@@ -375,6 +375,9 @@ function isTodoVisibleToday(todo) {
   );
 }
 
+// 同 store.js 的 SCREEN_TODO_LIMIT：最多幾筆待辦可以顯示在電子紙上
+const SCREEN_TODO_LIMIT = 4;
+
 function renderTodoList() {
   const list = $('todo-list');
   const todos = [...state.todos]
@@ -383,11 +386,13 @@ function renderTodoList() {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
       return (a.reminderAt || '').localeCompare(b.reminderAt || '');
     });
+  const screenFull = state.todos.filter((t) => t.onScreen && !t.completed).length >= SCREEN_TODO_LIMIT;
   list.innerHTML = todos.length ? todos.map((todo) => `
     <div class="todo-item ${todo.completed ? 'completed' : ''} ${todo.pinned ? 'pinned' : ''}" data-todo-id="${escapeHtml(todo.id)}">
       <input type="checkbox" class="todo-check" ${todo.completed ? 'checked' : ''} />
       <span class="todo-title">${escapeHtml(todo.title)}</span>
       ${todo.reminderAt ? `<span class="todo-due">提醒 ${escapeHtml(new Date(todo.reminderAt).toLocaleString('zh-Hant'))}</span>` : ''}
+      ${todo.completed ? '' : `<label class="todo-screen-input" title="勾選後顯示在電子紙看板(最多${SCREEN_TODO_LIMIT}筆)"><input type="checkbox" class="todo-screen-check" ${todo.onScreen ? 'checked' : ''} ${!todo.onScreen && screenFull ? 'disabled' : ''} /> 屏幕</label>`}
       <span class="todo-actions"><button class="btn-edit-todo">編輯</button><button class="btn-delete-todo">刪除</button></span>
     </div>`).join('') : '<p style="color:#888;">目前沒有待辦事項</p>';
 }
@@ -3507,6 +3512,15 @@ $('todo-list').addEventListener('click', (e) => {
   if (e.target.closest('.btn-delete-todo')) deleteTodo(id);
 });
 $('todo-list').addEventListener('change', (e) => {
+  if (e.target.classList.contains('todo-screen-check')) {
+    const screenTodo = state.todos.find((entry) => entry.id === e.target.closest('.todo-item').dataset.todoId);
+    if (!screenTodo) return;
+    call(window.api.todo.save({ ...screenTodo, onScreen: e.target.checked }), (err) => alert('更新失敗：' + err)).then((saved) => {
+      if (saved) Object.assign(screenTodo, saved);
+      renderTodoList();
+    });
+    return;
+  }
   if (!e.target.classList.contains('todo-check')) return;
   const item = e.target.closest('.todo-item');
   const todo = state.todos.find((entry) => entry.id === item.dataset.todoId);
