@@ -137,11 +137,18 @@ async function deleteTicket(id, reason) {
   return res.data.data;
 }
 
-// endTime選填(YYYY-MM-DDTHH:MM)：轉單時一併調整任務結束日期，不帶=不改
-async function transferTicket(id, info, chgUserId, endTime) {
+// endTime/startTime選填(YYYY-MM-DDTHH:MM)：轉單時一併調整任務結束/開始日期，不帶=不改
+async function transferTicket(id, info, chgUserId, endTime, startTime) {
   const body = { info, chg_user_id: chgUserId };
   if (endTime) body.end_time = endTime;
+  if (startTime) body.start_time = startTime;
   const res = await client().post(`/tickets/${id}/transfer`, body);
+  return res.data.data;
+}
+
+// 只改工單的任務開始/結束日期，times是{ start_time?, end_time? }(YYYY-MM-DDTHH:MM)，沒帶的欄位不改，回傳更新後的{ start_time, end_time }
+async function updateTicketTimes(id, times) {
+  const res = await client().post(`/tickets/${id}/times`, times);
   return res.data.data;
 }
 
@@ -204,6 +211,7 @@ module.exports = {
   deleteTicket,
   getDesktopData,
   saveDesktopData,
+  updateTicketTimes,
   updateTicketVersion,
   addTicketVersion,
   attachFile,

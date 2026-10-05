@@ -361,6 +361,9 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .version-editor { display: inline-flex; align-items: center; gap: 4px; }
 .btn-version-edit, .btn-version-cancel { padding: 0 6px; font-size: 12px; line-height: 1.6; }
 .btn-version-cancel.hidden { display: none; }
+.time-editor { display: inline-flex; align-items: center; gap: 4px; }
+.btn-time-edit, .btn-time-cancel { padding: 0 6px; font-size: 12px; line-height: 1.6; }
+.btn-time-cancel.hidden { display: none; }
 .version-select, .version-new-input { font-size: 12px; max-width: 220px; }
 #mail-modal-frame { width: 100%; height: 55vh; border: 1px solid #e2e5ea; border-radius: 4px; background: #fff; }
 .meta { color: #888; font-size: 12px; }

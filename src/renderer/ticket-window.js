@@ -33,6 +33,7 @@ async function loadTicket() {
 
   $('tw-basic').innerHTML = ticketFullInfoRows(ticket);
   bindVersionEditor($('tw-basic'), ticket);
+  bindTimeEditors($('tw-basic'), ticket);
   // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
   $('tw-desc').innerHTML = ticket.description || '(無說明)';
   $('tw-attachments').innerHTML = attachmentsHtml(ticket.attachments);
@@ -52,7 +53,7 @@ $('btn-tw-reload').addEventListener('click', loadTicket);
 $('btn-tw-jump-to-site').addEventListener('click', () => call(window.api.window.jumpInMain('site', currentProjectId)));
 $('btn-tw-jump-to-project').addEventListener('click', () => call(window.api.window.jumpInMain('project', currentProjectId)));
 // 轉單成功後重新讀取這張工單，顯示新的負責人員/狀態/轉單說明回覆
-$('btn-tw-transfer').addEventListener('click', () => openTransferTicketModal(ticketId, loadTicket, currentTicket && currentTicket.end_time, currentTicket ? { [ticketId]: currentTicket.p_user_id } : undefined));
+$('btn-tw-transfer').addEventListener('click', () => openTransferTicketModal(ticketId, loadTicket, currentTicket && currentTicket.end_time, currentTicket ? { [ticketId]: currentTicket.p_user_id } : undefined, currentTicket && currentTicket.start_time));
 bindTransferTicketModal();
 $('btn-tw-reply').addEventListener('click', () => call(window.api.window.jumpInMain('reply', ticketId)));
 // 刪除後重新讀取，畫面會顯示「已刪除」狀態與刪除原因回覆

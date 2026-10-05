@@ -1331,6 +1331,14 @@ function closeTicketSearchDetail() {
 }
 
 // 詳情頁改了系統功能版本後，左側工單清單裡同一張單也跟著更新，不用等下次重新整理
+function syncTicketTimes(ticketId, data) {
+  const t = state.tickets.find((x) => String(x.id) === String(ticketId));
+  if (!t) return;
+  t.start_time = data.start_time;
+  t.end_time = data.end_time;
+  renderTicketList();
+}
+
 function syncTicketVersion(ticketId, data) {
   const t = state.tickets.find((x) => String(x.id) === String(ticketId));
   if (!t) return;
@@ -1821,6 +1829,7 @@ async function openTicketSearchDetail(id, syncList = false) {
 
   $('ticket-search-detail-basic').innerHTML = ticketFullInfoRows(ticket);
   bindVersionEditor($('ticket-search-detail-basic'), ticket, (data) => syncTicketVersion(ticket.id, data));
+  bindTimeEditors($('ticket-search-detail-basic'), ticket, (data) => syncTicketTimes(ticket.id, data));
 
   // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
   $('ticket-search-detail-desc').innerHTML = ticket.description || '(無說明)';
@@ -3452,7 +3461,7 @@ $('btn-ts-transfer').addEventListener('click', () => {
   if (!state.currentTicketSearchDetail) return;
   // 轉單後重新整理詳情，顯示轉單後的最新狀態/負責人員/回覆紀錄
   const d = state.currentTicketSearchDetail;
-  openTransferTicketModal(d.id, (ticketId) => openTicketSearchDetail(ticketId), d.end_time, { [d.id]: d.p_user_id });
+  openTransferTicketModal(d.id, (ticketId) => openTicketSearchDetail(ticketId), d.end_time, { [d.id]: d.p_user_id }, d.start_time);
 });
 bindTransferTicketModal();
 $('btn-ts-reply').addEventListener('click', () => {

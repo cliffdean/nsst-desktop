@@ -224,6 +224,69 @@ function loadVersionOptions() {
   return versionOptionsPromise;
 }
 
+// 任務開始/結束日期：顯示文字+筆按鈕，點筆變成datetime-local輸入框，筆變成保存按鈕；綁定事件見bindTimeEditors
+const TIME_FIELD_LABELS = { start_time: '任務開始日期', end_time: '任務結束日期' };
+
+function timeEditorHtml(ticket, field) {
+  const label = TIME_FIELD_LABELS[field];
+  return `<span class="time-editor" data-field="${field}"><span class="time-value">${escapeHtml(validTime(ticket[field]) || '-')}</span>`
+    + `<button type="button" class="btn-time-edit" title="修改${label}">✎</button>`
+    + '<button type="button" class="btn-time-cancel hidden" title="取消修改">✕</button></span>';
+}
+
+// ticket是目前顯示中的工單物件，存檔成功會直接更新它的start_time/end_time，onSaved給呼叫端同步其他畫面用
+function bindTimeEditors(container, ticket, onSaved) {
+  container.querySelectorAll('.time-editor').forEach((box) => {
+    const field = box.dataset.field;
+    const label = TIME_FIELD_LABELS[field];
+    const btn = box.querySelector('.btn-time-edit');
+    const cancelBtn = box.querySelector('.btn-time-cancel');
+    const valueEl = box.querySelector('.time-value');
+    let input = null;
+
+    const exitEdit = () => {
+      if (input) input.replaceWith(valueEl);
+      input = null;
+      btn.textContent = '✎';
+      btn.title = `修改${label}`;
+      cancelBtn.classList.add('hidden');
+    };
+    cancelBtn.addEventListener('click', exitEdit);
+
+    btn.addEventListener('click', async () => {
+      if (!input) {
+        input = document.createElement('input');
+        input.type = 'datetime-local';
+        input.className = 'time-input';
+        input.value = toDatetimeLocal(ticket[field]);
+        valueEl.replaceWith(input);
+        input.focus();
+        btn.textContent = '💾';
+        btn.title = `保存${label}`;
+        cancelBtn.classList.remove('hidden');
+        return;
+      }
+      if (!input.value) return alert(`請選擇${label}`);
+      if (input.value === toDatetimeLocal(ticket[field])) return exitEdit();
+
+      btn.disabled = true;
+      cancelBtn.disabled = true;
+      try {
+        const data = await call(window.api.eip.updateTicketTimes(ticket.id, { [field]: input.value }), (err) => alert(`修改${label}失敗：` + err));
+        if (!data) return;
+        ticket.start_time = data.start_time;
+        ticket.end_time = data.end_time;
+        valueEl.textContent = validTime(ticket[field]) || '-';
+        exitEdit();
+        if (onSaved) onSaved(data);
+      } finally {
+        btn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    });
+  });
+}
+
 // 能不能在下拉選單新增版本(專管/總經理)，各視窗whoami完後設定，後端也會再檢查一次
 const versionPermission = { canAdd: false };
 const NEW_VERSION_VALUE = '__new__';
@@ -333,6 +396,7 @@ function bindVersionEditor(container, ticket, onSaved) {
 let transferTicketIds = [];
 let transferDoneCallback = null;
 let transferAssignees = {}; // { 工單id: 目前負責人id }，轉給「本來就是負責人」的人時要擋下來
+let transferOriginalStartTime = ''; // 開窗時預填的開始日期，沒被改動就不送
 let transferOriginalEndTime = ''; // 開窗時預填的結束日期，沒被改動就不送，避免沒必要地改到工單
 let transferEngineersPromise = null;
 
@@ -371,12 +435,15 @@ function toDatetimeLocal(value) {
 // ticketIds：單一id或id陣列(左側批次轉單)；onDone(成功的id，傳入陣列就回陣列)：給呼叫端重新整理畫面用
 // currentEndTime：單張轉單時帶入該工單目前的結束日期當預設值；批次不帶(每張不同)，留空=不改
 // assignees：{ 工單id: 目前負責人id }(選填)，用來檢查「本來就在A身上又轉給A」
-async function openTransferTicketModal(ticketIds, onDone, currentEndTime, assignees) {
+// currentStartTime：同上，單張轉單帶入目前的開始日期，批次留空=不改
+async function openTransferTicketModal(ticketIds, onDone, currentEndTime, assignees, currentStartTime) {
   const isBatch = Array.isArray(ticketIds);
   transferTicketIds = isBatch ? ticketIds : [ticketIds];
   transferAssignees = assignees || {};
   transferDoneCallback = onDone ? (done) => onDone(isBatch ? done : done[0]) : null;
   $('transfer-ticket-info').value = '';
+  transferOriginalStartTime = isBatch ? '' : toDatetimeLocal(currentStartTime);
+  $('transfer-ticket-start-time').value = transferOriginalStartTime;
   transferOriginalEndTime = isBatch ? '' : toDatetimeLocal(currentEndTime);
   $('transfer-ticket-end-time').value = transferOriginalEndTime;
   $('transfer-ticket-message').textContent = isBatch ? `共 ${transferTicketIds.length} 張工單會轉給同一位工程師，並寫入同一段說明` : '';
@@ -422,15 +489,27 @@ async function submitTransferTicket() {
     transferTicketIds = transferTicketIds.filter((id) => !skip.has(String(id)));
   }
 
+  const startTimeValue = $('transfer-ticket-start-time').value;
   const endTimeValue = $('transfer-ticket-end-time').value;
-  const endTime = endTimeValue && endTimeValue !== transferOriginalEndTime ? endTimeValue : '';
+  let startTime = startTimeValue && startTimeValue !== transferOriginalStartTime ? startTimeValue : '';
+  let endTime = endTimeValue && endTimeValue !== transferOriginalEndTime ? endTimeValue : '';
+  // 開始/結束都有值時先在前端檢查先後；單張轉單只改其中一個時，另一個也一併帶上目前的值，
+  // 讓後端用完整的一組時間檢查，不會拿單獨一邊去跟舊值或空值比較
+  if (startTimeValue && endTimeValue && startTimeValue > endTimeValue) {
+    $('transfer-ticket-message').textContent = '開始日期不能晚於結束日期';
+    return;
+  }
+  if ((startTime || endTime) && transferTicketIds.length === 1) {
+    startTime = startTimeValue;
+    endTime = endTimeValue;
+  }
 
   const btn = $('btn-transfer-ticket-submit');
   btn.disabled = true;
   $('transfer-ticket-message').textContent = '處理中...';
   const ids = transferTicketIds;
   const onDone = transferDoneCallback;
-  const { done, failed } = await runForEachTicket(ids, (id) => window.api.eip.transferTicket(id, info, chgUserId, endTime));
+  const { done, failed } = await runForEachTicket(ids, (id) => window.api.eip.transferTicket(id, info, chgUserId, endTime, startTime));
   btn.disabled = false;
 
   if (failed.length) {
@@ -572,8 +651,8 @@ function ticketFullInfoRows(ticket) {
     ['負責業務', ticket.sales_name],
     ['預計工時', estimate],
     ['創建日期', validTime(ticket.created_at)],
-    ['任務開始日期', validTime(ticket.start_time)],
-    ['任務結束日期', validTime(ticket.end_time)],
+    ['任務開始日期', { html: timeEditorHtml(ticket, 'start_time') }],
+    ['任務結束日期', { html: timeEditorHtml(ticket, 'end_time') }],
     ['最後更新', validTime(ticket.updated_at)],
   ]);
 }
