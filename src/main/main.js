@@ -490,7 +490,12 @@ handle('eip:advanced-search-tickets', (filters) => eipApi.advancedSearchTickets(
 handle('eip:get-ticket-search-options', () => eipApi.getTicketSearchOptions());
 handle('eip:get-ticket', (id) => eipApi.getTicket(id));
 handle('eip:reply-ticket', (id, payload) => eipApi.replyTicket(id, payload));
-handle('eip:transfer-ticket', (id, info, chgUserId, endTime, startTime) => eipApi.transferTicket(id, info, chgUserId, endTime, startTime));
+handle('eip:transfer-ticket', async (id, info, chgUserId, endTime, startTime) => {
+  const result = await eipApi.transferTicket(id, info, chgUserId, endTime, startTime);
+  // 轉單後負責人/狀態已變，通知主視窗(不論從主視窗或獨立工單視窗轉)重整左側清單，避免對舊資料誤操作
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ticket:changed', id);
+  return result;
+});
 handle('eip:update-ticket-times', (id, times) => eipApi.updateTicketTimes(id, times));
 handle('eip:update-ticket-version', (id, version) => eipApi.updateTicketVersion(id, version));
 handle('eip:delete-ticket', (id, reason) => eipApi.deleteTicket(id, reason));

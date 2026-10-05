@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld('api', {
     openTicket: invoke('window:open-ticket'),
     jumpInMain: invoke('window:jump-in-main'),
     onJump: (callback) => ipcRenderer.on('window:jump', (_event, data) => callback(data)),
+    onTicketChanged: (callback) => ipcRenderer.on('ticket:changed', (_event, id) => callback(id)),
   },
   dialog: {
     pickFile: invoke('dialog:pick-file'),

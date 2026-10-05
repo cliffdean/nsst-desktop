@@ -3385,6 +3385,12 @@ window.api.window.onJump(({ target, id }) => {
   else if (target === 'project') jumpToProject(id);
   else if (target === 'reply') openTicketDetail(id);
 });
+// 工單被轉單後立即重整左側清單；左側正在看的就是這張時，轉單後多半已不在清單內，回到清單避免誤操作
+window.api.window.onTicketChanged((id) => {
+  refreshTicketList().then(() => {
+    if (state.currentTicket && String(state.currentTicket.id) === String(id) && !state.tickets.some((t) => String(t.id) === String(id))) backToList();
+  });
+});
 $('btn-close-app-notification').addEventListener('click', () => $('app-notification').classList.add('hidden'));
 $('btn-settings').addEventListener('click', () => $('settings-panel').classList.toggle('hidden'));
 $('btn-refresh').addEventListener('click', refreshAll);
