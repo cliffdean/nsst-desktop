@@ -23,8 +23,8 @@ async function loadTicket() {
   currentProjectId = ticket.project_id || null;
   $('btn-tw-jump-to-site').classList.toggle('hidden', !currentProjectId);
   $('btn-tw-jump-to-project').classList.toggle('hidden', !currentProjectId);
-  // 轉單僅限「專管」身份，且只有「已指派」狀態的工單可以轉(跟後端transfer()的限制一致)
-  $('btn-tw-transfer').classList.toggle('hidden', !canTransferTicket || ticket.status !== 1);
+  // 轉單僅限「專管」身份，且只有「新任務(未指派)」或「已指派」狀態的工單可以轉/指派(跟後端transfer()的限制一致)
+  $('btn-tw-transfer').classList.toggle('hidden', !canTransferTicket || (ticket.status !== 0 && ticket.status !== 1));
   // 這個視窗不做回覆表單，回覆一律到主視窗左側的工單詳情；已結束(成功/關閉/刪除)的單後端不收回覆
   const closed = [2, 4, 8, 9].includes(ticket.status);
   $('btn-tw-reply').classList.toggle('hidden', closed || (!isOwn && !canEditAnyTicket));

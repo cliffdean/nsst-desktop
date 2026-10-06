@@ -1818,8 +1818,8 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('ticket-search-detail-id').textContent = formatTicketNo(ticket.id);
   $('btn-ts-jump-to-site').classList.toggle('hidden', !ticket.project_id);
   $('btn-ts-jump-to-project').classList.toggle('hidden', !ticket.project_id);
-  // 轉單僅限「專管」身份，且只有「已指派」狀態的工單可以轉(跟後端transfer()的限制一致)
-  $('btn-ts-transfer').classList.toggle('hidden', !state.canTransferTicket || ticket.status !== 1);
+  // 轉單僅限「專管」身份，且只有「新任務(未指派)」或「已指派」狀態的工單可以轉/指派(跟後端transfer()的限制一致)
+  $('btn-ts-transfer').classList.toggle('hidden', !state.canTransferTicket || (ticket.status !== 0 && ticket.status !== 1));
   // 專管可以回覆別人的工單：回覆表單在左側工單詳情，這裡給個按鈕直接開過去；已結束(成功/關閉/刪除)的單後端不收回覆
   const closed = [2, 4, 8, 9].includes(ticket.status);
   $('btn-ts-reply').classList.toggle('hidden', closed || (!isOwn && !state.canEditAnyTicket));
@@ -2362,12 +2362,12 @@ function updateBatchBar() {
   $('btn-batch-finish').disabled = !!finishBlock;
   $('btn-batch-finish').title = finishBlock || '把所選已完成的工單回覆「完成專案」並轉品保(第二次送QC)';
 
-  // 批次轉單：僅限專管，且全部都要是「已指派」(跟後端transfer()的限制一致)
+  // 批次轉單：僅限專管，且全部都要是「新任務(未指派)」或「已指派」(跟後端transfer()的限制一致)
   $('btn-batch-transfer').classList.toggle('hidden', !state.canTransferTicket);
-  const notAssigned = selected.filter((t) => t.status !== 1);
+  const notAssigned = selected.filter((t) => t.status !== 0 && t.status !== 1);
   $('btn-batch-transfer').disabled = notAssigned.length > 0;
   $('btn-batch-transfer').title = notAssigned.length
-    ? `只有「已指派」狀態的工單可以轉單，所選有 ${notAssigned.length} 張不是`
+    ? `只有「新任務」或「已指派」狀態的工單可以轉單/指派，所選有 ${notAssigned.length} 張不是`
     : '把所選工單轉給同一位工程師(僅限專管)';
 
   $('btn-batch-delete').classList.toggle('hidden', !state.canDeleteTicket);
