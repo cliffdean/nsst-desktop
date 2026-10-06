@@ -99,7 +99,9 @@ async function getCommitFiles(projectId, hash) {
       deletions: s.deletions === undefined ? null : s.deletions,
     };
   });
-  return { message, files };
+  // %ci=提交時間(含時區，格式 2026-10-06 14:30:05 +0800)，只取到秒；%an=作者
+  const meta = (await git.show(['-s', '--format=%ci%n%an', hash])).trim().split(/\r?\n/);
+  return { message, files, date: (meta[0] || '').slice(0, 19), author: meta[1] || '' };
 }
 
 // 單一檔案在該commit的異動內容，點開檔案才讀取，避免一次撈全部diff太慢

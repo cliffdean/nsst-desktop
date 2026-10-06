@@ -13,6 +13,11 @@ const siteService = require('./siteService');
 const syncService = require('./syncService');
 const screenService = require('./screenService');
 
+// <input type="datetime-local"> 的顯示格式跟著Chromium的lang走，zh-TW會是「上午/下午」12小時制；
+// 日文locale是 yyyy/mm/dd HH:mm 的24小時制且年月日順序與中文習慣一致。必須在app ready之前設定；
+// 畫面上的日期文字都有明確指定'zh-Hant'，不受這個設定影響
+app.commandLine.appendSwitch('lang', 'ja');
+
 let mainWindow = null;
 let tray = null;
 let currentHotkey = null;

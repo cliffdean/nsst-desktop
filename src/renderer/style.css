@@ -616,6 +616,7 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .git-source-toggle { display: flex; gap: 16px; font-size: 13px; margin-bottom: 8px; }
 .git-source-toggle label { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
 #git-commits-box { margin-bottom: 10px; }
+.git-commits-filter { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; }
 #git-commits-list, #batch-git-commits-list { max-height: 380px; overflow-y: auto; border: 1px solid #e3e6eb; border-radius: 4px; padding: 4px; margin-top: 6px; background: #fafbfc; }
 .git-commit-item { border-bottom: 1px solid #eef0f3; }
 .git-commit-item:last-child { border-bottom: none; }

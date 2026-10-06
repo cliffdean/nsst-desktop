@@ -49,6 +49,9 @@ ${diffText || '(無)'}`;
 }
 
 // 範本裡「送QC/品保測試」這類日期只是範例格式，一律要求AI換成今天的實際日期，不要照抄或留占位文字給使用者填
+// 輸出語言：一律台灣繁體中文，避免模型(尤其是中文模型)飄成簡體
+const LANGUAGE_RULE = '【語言規定】reply與commitMessage內的中文一律使用「繁體中文(台灣用語)」，嚴禁出現任何簡體字(如：优化、修复、问题、检查、数据、导出)；程式碼、檔名、變數名稱與專有名詞維持原樣。';
+
 function buildTemplateBlock(templateText, todayDate, extraNote) {
   if (!templateText) return '';
   return (
@@ -80,6 +83,12 @@ ${sourceText}
 ${templateBlock}
 ${noteBlock}
 
+【範圍規定】下面的git異動(commit/diff)可能一次包含多張工單的內容，你只負責「這一張工單」：
+1. 先依工單標題與需求說明判斷範圍，只挑出與這張工單直接相關的檔案與異動來說明；
+2. 與這張工單無關的異動(其他功能、其他工單、順手修改)一律不要寫進reply，也不要提到有其他異動；
+3. 說明內容必須以git實際修改為依據(改了哪些檔案、邏輯)，不可憑空捏造沒有改過的內容；
+4. 若git異動裡完全找不到與這張工單相關的內容，請在reply如實說明「本次提交未包含此工單相關異動」，不要硬湊。
+${LANGUAGE_RULE}
 請用以下JSON格式回覆，不要加其他說明文字、不要用markdown code block包起來：
 {"reply": "工單回覆內容，條列式說明做了什麼、驗證方式，語氣正式、給客戶或PM看", "commitMessage": ${
     needCommitMessage ? '"一行的conventional commit訊息，例如 fix: xxx 或 feat: xxx，主題要圍繞這張工單"' : '""'
@@ -122,6 +131,7 @@ ${sourceText}
 ${templateBlock}
 ${noteBlock}
 
+${LANGUAGE_RULE}
 請用以下JSON格式回覆，不要加其他說明文字、不要用markdown code block包起來：
 {"reply": "共用工單回覆內容，需用工單編號分段列出每一張工單各自做了什麼、驗證方式，語氣正式、給客戶或PM看", "commitMessage": ${
     needCommitMessage ? '"一行的conventional commit訊息，例如 fix: xxx 或 feat: xxx，主題要能涵蓋這幾張工單的共同異動"' : '""'
@@ -146,7 +156,10 @@ async function callLlm(prompt) {
   const llm = settingsStore.get('llm');
   const completion = await client().chat.completions.create({
     model: llm.model,
-    messages: [{ role: 'user', content: prompt }],
+    messages: [
+      { role: 'system', content: '你是台灣的資深工程師，所有中文輸出一律使用繁體中文(台灣用語)，絕對不可使用簡體字。' },
+      { role: 'user', content: prompt },
+    ],
     temperature: 0.3,
   });
   return completion.choices[0].message.content || '';

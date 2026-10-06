@@ -2491,7 +2491,7 @@ async function loadBatchCommitsList() {
   if (selected.length < 2) return;
   $('batch-git-commits-list').innerHTML = '<p class="meta">讀取中...</p>';
   const commits = await call(
-    window.api.git.listCommits(selected[0].project_id, 30),
+    window.api.git.listCommits(selected[0].project_id, COMMIT_LIST_LIMIT),
     (err) => {
       $('batch-git-commits-list').innerHTML = `<p style="color:#c0392b;">${escapeHtml(err)}</p>`;
     }
@@ -2503,6 +2503,7 @@ async function loadBatchCommitsList() {
   }
   $('batch-git-commits-list').innerHTML = commitListHtml(commits);
   bindCommitList($('batch-git-commits-list'), selected[0].project_id);
+  filterCommitList($('batch-git-commits-list'), $('batch-git-commits-filter').value);
 }
 
 async function generateBatchAiReply() {
@@ -2545,7 +2546,7 @@ async function generateBatchAiReply() {
     tickets.push(full);
   }
 
-  const type = $('batch-reply-type').value;
+  const type = $('batch-reply-type').value || (tickets.length && tickets.every((t) => defaultLocalTypeFor(t) === defaultLocalTypeFor(tickets[0])) ? defaultLocalTypeFor(tickets[0]) : '');
   const templateText = (type && state.settings.replyTemplates && state.settings.replyTemplates[type]) || '';
   const typeLabel = TICKET_TYPE_LABELS[type] || '';
   const durationSeconds = selected.reduce((sum, t) => sum + liveSecondsOf(state.timers[t.id]), 0);
@@ -3076,7 +3077,7 @@ async function loadCommitsList() {
   if (!state.currentTicket) return;
   $('git-commits-list').innerHTML = '<p class="meta">讀取中...</p>';
   const commits = await call(
-    window.api.git.listCommits(state.currentTicket.project_id, 30),
+    window.api.git.listCommits(state.currentTicket.project_id, COMMIT_LIST_LIMIT),
     (err) => {
       $('git-commits-list').innerHTML = `<p style="color:#c0392b;">${escapeHtml(err)}</p>`;
     }
@@ -3088,9 +3089,37 @@ async function loadCommitsList() {
   }
   $('git-commits-list').innerHTML = commitListHtml(commits);
   bindCommitList($('git-commits-list'), state.currentTicket.project_id);
+  filterCommitList($('git-commits-list'), $('git-commits-filter').value);
 }
 
 // ---- commit清單(單張詳情與批次共用)：清單只負責勾選，「查看」開大彈窗看完整訊息、涉及檔案與各檔異動 ----
+
+// 載入筆數放大到50，配合上方關鍵字搜尋(前端過濾，已勾選的不會因為搜尋而消失或被取消)
+const COMMIT_LIST_LIMIT = 50;
+
+function filterCommitList(container, keyword) {
+  const words = String(keyword || '').toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0;
+  const items = container.querySelectorAll('.git-commit-item');
+  items.forEach((item) => {
+    const hit = words.every((w) => item.dataset.search.includes(w));
+    item.classList.toggle('hidden', !hit);
+    if (hit) shown++;
+  });
+  let tip = container.querySelector('.git-commit-filter-tip');
+  if (!tip && items.length) {
+    tip = document.createElement('p');
+    tip.className = 'meta git-commit-filter-tip';
+    container.prepend(tip);
+  }
+  if (tip) tip.textContent = words.length ? `符合 ${shown} / ${items.length} 筆(先前勾選的即使被隱藏仍會保留勾選)` : `共 ${items.length} 筆`;
+}
+
+// 清單空間有限，只顯示 MM/DD HH:mm(完整時間在hover提示與「查看」彈窗裡)；hash仍保留在搜尋條件與提示中
+function shortCommitTime(date) {
+  const m = /^d{4}-(dd)-(dd)[T ](dd:dd)/.exec(String(date || ''));
+  return m ? `${m[1]}/${m[2]} ${m[3]}` : '';
+}
 
 function commitListHtml(commits) {
   return commits
@@ -3099,12 +3128,12 @@ function commitListHtml(commits) {
       // 日期時間拿掉：這個區塊的寬度本來就窄，hash+日期都是固定寬度不會縮，
       // 剩給commit訊息的空間被擠到只剩一點點，訊息幾乎全被省略號蓋掉；日期在「查看」彈窗裡看得到，不差這裡
       return `
-      <div class="git-commit-item" data-hash="${c.hash}" data-short="${c.shortHash}" data-subject="${escapeHtml(subject)}">
+      <div class="git-commit-item" data-hash="${c.hash}" data-short="${c.shortHash}" data-subject="${escapeHtml(subject)}" data-search="${escapeHtml(`${c.shortHash} ${c.hash} ${c.author || ''} ${c.message}`.toLowerCase())}">
         <div class="git-commit-row">
           <button type="button" class="git-commit-view" title="在彈窗中查看完整訊息、涉及檔案與異動內容">查看</button>
           <label class="git-commit-main">
             <input type="checkbox" value="${c.hash}" />
-            <span class="git-commit-hash">${c.shortHash}</span>
+            <span class="git-commit-hash" title="${c.shortHash}　${escapeHtml(String(c.date || ''))}">${shortCommitTime(c.date)}</span>
             <span class="git-commit-msg" title="${escapeHtml(c.message)}">${escapeHtml(subject)}</span>
           </label>
         </div>
@@ -3147,7 +3176,7 @@ async function openCommitModal(projectId, hash, shortHash, subject) {
   $('commit-modal-msg').textContent = info.message;
   const totalAdd = info.files.reduce((s, f) => s + (f.additions || 0), 0);
   const totalDel = info.files.reduce((s, f) => s + (f.deletions || 0), 0);
-  $('commit-modal-summary').innerHTML = `共 ${info.files.length} 個檔案　<span class="git-add">+${totalAdd}</span> <span class="git-del">-${totalDel}</span>`;
+  $('commit-modal-summary').innerHTML = `${info.date ? `提交時間 ${escapeHtml(info.date)}　` : ''}${info.author ? `作者 ${escapeHtml(info.author)}　` : ''}共 ${info.files.length} 個檔案　<span class="git-add">+${totalAdd}</span> <span class="git-del">-${totalDel}</span>`;
 
   if (!info.files.length) {
     $('commit-modal-files').innerHTML = '<p class="meta">沒有異動檔案(可能是merge commit)</p>';
@@ -3252,7 +3281,8 @@ async function generateAiReply() {
     repoPathForStatus = gitChanges.repoPath;
   }
 
-  const type = $('ticket-type-select').value;
+  // 沒手動選類型時，依EIP總表類型帶預設，才不會因為忘了選就沒套到範本
+  const type = $('ticket-type-select').value || defaultLocalTypeFor(state.currentTicket);
   const templateText = (type && state.settings.replyTemplates && state.settings.replyTemplates[type]) || '';
   const typeLabel = TICKET_TYPE_LABELS[type] || '';
 
@@ -3587,6 +3617,7 @@ document
   .querySelectorAll('input[name="git-source-mode"]')
   .forEach((el) => el.addEventListener('change', onGitSourceModeChange));
 $('btn-load-commits').addEventListener('click', loadCommitsList);
+$('git-commits-filter').addEventListener('input', (e) => filterCommitList($('git-commits-list'), e.target.value));
 $('btn-do-git-commit').addEventListener('click', confirmGitCommit);
 $('ticket-search').addEventListener('input', () => {
   state.searchQuery = $('ticket-search').value;
@@ -3633,6 +3664,7 @@ document
   .querySelectorAll('input[name="batch-git-source-mode"]')
   .forEach((el) => el.addEventListener('change', onBatchGitSourceModeChange));
 $('btn-batch-load-commits').addEventListener('click', loadBatchCommitsList);
+$('batch-git-commits-filter').addEventListener('input', (e) => filterCommitList($('batch-git-commits-list'), e.target.value));
 $('btn-batch-generate').addEventListener('click', generateBatchAiReply);
 $('btn-batch-copy-commit').addEventListener('click', () => window.api.clipboard.copy($('batch-reply-commit-message').value));
 
