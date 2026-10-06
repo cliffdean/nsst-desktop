@@ -2447,6 +2447,17 @@ async function submitBatch() {
     return;
   }
 
+  // 各張工單手動設定時間若沒按「套用」，先自動套用；任何一張套不上就整批不送，避免送出錯的時間
+  for (const ticket of selected) {
+    const problem = await autoApplyPendingBatchManualTime(ticket.id);
+    if (problem) {
+      $('batch-message').textContent = `#${ticket.id} 手動設定的時間無法套用：${problem}`;
+      return;
+    }
+  }
+  renderTicketList();
+  renderBatchTimeList(selectedTickets());
+
   let okCount = 0;
   const errors = [];
   for (const ticket of selected) {
@@ -2659,6 +2670,22 @@ function openBatchManualForm(ticketId) {
   formEl.querySelector('.batch-manual-minutes').value = prefill ? prefill.minutes : '';
   formEl.querySelector('.batch-manual-message').textContent = prefill ? prefill.message : '';
   formEl.classList.remove('hidden');
+  formEl.dataset.snapshot = batchManualFormValues(formEl);
+}
+
+function batchManualFormValues(formEl) {
+  return ['.batch-manual-start', '.batch-manual-end', '.batch-manual-hours', '.batch-manual-minutes'].map((sel) => formEl.querySelector(sel).value).join('|');
+}
+
+// 批次送出前：該張工單的手動設定表單開著、有改過卻沒按「套用」就自動套用；回傳失敗訊息(成功回傳空字串)
+async function autoApplyPendingBatchManualTime(ticketId) {
+  const row = batchTimeRow(ticketId);
+  if (!row) return '';
+  const formEl = row.querySelector('.batch-time-manual-form');
+  if (formEl.classList.contains('hidden') || batchManualFormValues(formEl) === formEl.dataset.snapshot) return '';
+  if (!formEl.querySelector('.batch-manual-start').value && !formEl.querySelector('.batch-manual-end').value) return '';
+  const ok = await applyBatchManualTime(ticketId, true);
+  return ok ? '' : formEl.querySelector('.batch-manual-message').textContent || '手動時間無法套用';
 }
 
 function closeBatchManualForm(ticketId) {
@@ -2678,7 +2705,7 @@ function autoFillBatchManualDuration(row) {
   row.querySelector('.batch-manual-minutes').value = Math.floor((diff % 3600) / 60);
 }
 
-async function applyBatchManualTime(ticketId) {
+async function applyBatchManualTime(ticketId, deferRender) {
   const row = batchTimeRow(ticketId);
   if (!row) return;
   const formEl = row.querySelector('.batch-time-manual-form');
@@ -2687,7 +2714,7 @@ async function applyBatchManualTime(ticketId) {
   const e = formEl.querySelector('.batch-manual-end').value;
   if (!s || !e) {
     msgEl.textContent = '請填開始與結束時間';
-    return;
+    return false;
   }
   const seconds =
     (Number(formEl.querySelector('.batch-manual-hours').value) || 0) * 3600 +
@@ -2698,10 +2725,14 @@ async function applyBatchManualTime(ticketId) {
       msgEl.textContent = '設定失敗：' + err;
     }
   );
-  if (!timer) return;
+  if (!timer) return false;
   state.timers[ticketId] = timer;
-  renderTicketList();
-  renderBatchTimeList(selectedTickets());
+  // 送出前自動套用時不重畫，否則其他張尚未套用的表單內容會被清掉；整批處理完再一次重畫
+  if (!deferRender) {
+    renderTicketList();
+    renderBatchTimeList(selectedTickets());
+  }
+  return true;
 }
 
 async function clearBatchManualTime(ticketId) {
@@ -2922,6 +2953,13 @@ function toInputValue(iso) {
   return formatLocalDateTime(iso).replace(' ', 'T');
 }
 
+// 打開表單當下各欄位的值，送出回覆時用來判斷使用者有沒有改過(沒改就不需要重複套用)
+let manualFormSnapshot = '';
+
+function manualFormValues() {
+  return ['manual-start', 'manual-end', 'manual-hours', 'manual-minutes'].map((id) => $(id).value).join('|');
+}
+
 function openManualForm() {
   const prefill = manualFormPrefill(state.timers[state.currentTicket.id]);
   if (prefill) {
@@ -2932,6 +2970,18 @@ function openManualForm() {
   }
   $('timer-manual-message').textContent = prefill ? prefill.message : '';
   $('timer-manual-form').classList.remove('hidden');
+  manualFormSnapshot = manualFormValues();
+}
+
+// 送出回覆前呼叫：手動設定表單開著、而且使用者有改過內容卻忘了按「套用」時，自動幫他套用。
+// 回傳false代表套用失敗(欄位不完整/後端拒絕)，呼叫端應中止送出，避免送出的是錯的時間
+async function autoApplyPendingManualTime() {
+  if ($('timer-manual-form').classList.contains('hidden')) return true;
+  if (manualFormValues() === manualFormSnapshot) return true;
+  if (!$('manual-start').value && !$('manual-end').value) return true; // 整個清空等於沒填，不處理
+  const ok = await applyManualTime();
+  if (!ok) $('detail-message').textContent = '手動設定的時間無法套用：' + $('timer-manual-message').textContent;
+  return ok;
 }
 
 // 起訖時間都填了就先用「結束−開始」帶入用時，使用者再依實際扣掉休息時間微調
@@ -2950,7 +3000,7 @@ async function applyManualTime() {
   const e = $('manual-end').value;
   if (!s || !e) {
     $('timer-manual-message').textContent = '請填開始與結束時間';
-    return;
+    return false;
   }
   const seconds = (Number($('manual-hours').value) || 0) * 3600 + (Number($('manual-minutes').value) || 0) * 60;
   const timer = await call(
@@ -2963,11 +3013,12 @@ async function applyManualTime() {
       $('timer-manual-message').textContent = '設定失敗：' + err;
     }
   );
-  if (!timer) return;
+  if (!timer) return false;
   state.timers[state.currentTicket.id] = timer;
   $('timer-manual-form').classList.add('hidden');
   renderTicketList();
   updateDetailTimerDisplay();
+  return true;
 }
 
 async function clearManualTime() {
@@ -3117,7 +3168,7 @@ function filterCommitList(container, keyword) {
 
 // 清單空間有限，只顯示 MM/DD HH:mm(完整時間在hover提示與「查看」彈窗裡)；hash仍保留在搜尋條件與提示中
 function shortCommitTime(date) {
-  const m = /^d{4}-(dd)-(dd)[T ](dd:dd)/.exec(String(date || ''));
+  const m = /^\d{4}-(\d\d)-(\d\d)[T ](\d\d:\d\d)/.exec(String(date || ''));
   return m ? `${m[1]}/${m[2]} ${m[3]}` : '';
 }
 
@@ -3125,16 +3176,15 @@ function commitListHtml(commits) {
   return commits
     .map((c) => {
       const subject = c.message.split('\n')[0];
-      // 日期時間拿掉：這個區塊的寬度本來就窄，hash+日期都是固定寬度不會縮，
-      // 剩給commit訊息的空間被擠到只剩一點點，訊息幾乎全被省略號蓋掉；日期在「查看」彈窗裡看得到，不差這裡
+      // 這個區塊寬度窄，只顯示精簡的 MM/DD HH:mm 取代hash，滑鼠移到該列上會顯示hash、完整時間與完整訊息，「查看」彈窗裡也有
       return `
-      <div class="git-commit-item" data-hash="${c.hash}" data-short="${c.shortHash}" data-subject="${escapeHtml(subject)}" data-search="${escapeHtml(`${c.shortHash} ${c.hash} ${c.author || ''} ${c.message}`.toLowerCase())}">
+      <div class="git-commit-item" data-hash="${c.hash}" data-short="${c.shortHash}" data-subject="${escapeHtml(subject)}" data-search="${escapeHtml(`${c.shortHash} ${c.hash} ${c.author || ''} ${c.message} ${c.body || ''}`.toLowerCase())}">
         <div class="git-commit-row">
           <button type="button" class="git-commit-view" title="在彈窗中查看完整訊息、涉及檔案與異動內容">查看</button>
-          <label class="git-commit-main">
+          <label class="git-commit-main" title="${escapeHtml(`${c.shortHash}　${c.date || ''}\n${c.message}${c.body ? `\n\n${c.body}` : ''}`)}">
             <input type="checkbox" value="${c.hash}" />
-            <span class="git-commit-hash" title="${c.shortHash}　${escapeHtml(String(c.date || ''))}">${shortCommitTime(c.date)}</span>
-            <span class="git-commit-msg" title="${escapeHtml(c.message)}">${escapeHtml(subject)}</span>
+            <span class="git-commit-hash">${shortCommitTime(c.date)}</span>
+            <span class="git-commit-msg">${escapeHtml(subject)}</span>
           </label>
         </div>
       </div>`;
@@ -3380,6 +3430,9 @@ async function submitReply() {
     $('detail-message').textContent = '請先填寫回覆內容';
     return;
   }
+
+  // 手動時間設好卻忘了按「套用」：先幫忙套用，再鎖定工時
+  if (!(await autoApplyPendingManualTime())) return;
 
   // 送出前先把計時器停下來，鎖定這次的實際工時
   const stopped = await call(window.api.timer.stop(state.currentTicket.id));

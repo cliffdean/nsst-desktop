@@ -55,6 +55,7 @@ async function listCommits(projectId, limit) {
     date: c.date,
     author: c.author_name,
     message: c.message,
+    body: (c.body || '').trim(), // git log的message只有標題行，內文在body；搜尋要涵蓋內文
   }));
 }
 
