@@ -126,7 +126,7 @@ async function replyTicket(id, payload) {
   return res.data.data;
 }
 
-// 轉單(僅限「專管」身份)：把工單改指派給其他工程師，不限自己負責的工單，但一定要附一段說明文字
+// 轉單(僅限「專管」身份)：把工單改指派給其他工程師，不限自己負責的工單，說明文字選填(不寫就不新增回覆，避免影響工作量)
 // 個人資料同步(待辦/加星/工單類型標記/回覆範本/計時)：回傳{ data: {key: value}, updated_at: {key: time} }
 async function getDesktopData() {
   const res = await client().get('/desktop-data');
@@ -146,7 +146,8 @@ async function deleteTicket(id, reason) {
 
 // endTime/startTime選填(YYYY-MM-DDTHH:MM)：轉單時一併調整任務結束/開始日期，不帶=不改
 async function transferTicket(id, info, chgUserId, endTime, startTime) {
-  const body = { info: newlinesToBr(info), chg_user_id: chgUserId };
+  const body = { chg_user_id: chgUserId };
+  if (info && info.trim()) body.info = newlinesToBr(info);
   if (endTime) body.end_time = endTime;
   if (startTime) body.start_time = startTime;
   const res = await client().post(`/tickets/${id}/transfer`, body);

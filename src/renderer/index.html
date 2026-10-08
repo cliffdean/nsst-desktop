@@ -759,7 +759,7 @@
           <h2>轉單</h2>
           <button id="btn-transfer-ticket-close">✕</button>
         </div>
-        <p class="meta">轉單後工單狀態會變回「已指派」，請簡述轉單原因，這則說明會記錄在工單回覆裡。</p>
+        <p class="meta">轉單後工單狀態會變回「已指派」，可簡述轉單原因，有寫的話會記錄在工單回覆裡；不寫則不新增回覆。</p>
         <label>轉單對象(工程部在職人員)
           <select id="transfer-ticket-target"></select>
         </label>
@@ -769,8 +769,8 @@
         <label>結束日期(選填，不改就留原值；批次轉單時留空=各張維持原本的結束日期)
           <input type="datetime-local" id="transfer-ticket-end-time" />
         </label>
-        <label>轉單說明(必填)
-          <textarea id="transfer-ticket-info" rows="4" placeholder="請說明轉單原因..."></textarea>
+        <label>轉單說明(選填，不寫就不會新增回覆)
+          <textarea id="transfer-ticket-info" rows="4" placeholder="選填：說明轉單原因..."></textarea>
         </label>
         <div class="actions">
           <button id="btn-transfer-ticket-submit">確認轉單</button>

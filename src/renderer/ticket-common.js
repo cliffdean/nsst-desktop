@@ -470,10 +470,6 @@ async function submitTransferTicket() {
     $('transfer-ticket-message').textContent = '請選擇轉單對象';
     return;
   }
-  if (!info) {
-    $('transfer-ticket-message').textContent = '請填寫轉單說明';
-    return;
-  }
 
   // 本來就是這位工程師負責的單不需要再轉：全部都是就擋下來；只有部分是就問要不要略過這幾張
   const already = transferTicketIds.filter((id) => transferAssignees[String(id)] != null && String(transferAssignees[String(id)]) === String(chgUserId));
