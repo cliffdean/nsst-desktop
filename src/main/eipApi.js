@@ -114,8 +114,15 @@ async function getTicketSearchOptions() {
   return res.data.data;
 }
 
+// 後端原樣把回覆/轉單說明當HTML存(EIP網頁直接顯示)，純文字的換行不轉成<br>就會擠成一團。已經含區塊標籤的(例如貼上的HTML)維持原樣
+function newlinesToBr(text) {
+  const t = String(text == null ? '' : text);
+  if (/<(br|p|div|li|ul|ol|table|pre)[\s/>]/i.test(t)) return t;
+  return t.replace(/\r\n|\r|\n/g, '<br>');
+}
+
 async function replyTicket(id, payload) {
-  const res = await client().post(`/tickets/${id}/reply`, payload);
+  const res = await client().post(`/tickets/${id}/reply`, { ...payload, info: newlinesToBr(payload && payload.info) });
   return res.data.data;
 }
 
@@ -139,7 +146,7 @@ async function deleteTicket(id, reason) {
 
 // endTime/startTime選填(YYYY-MM-DDTHH:MM)：轉單時一併調整任務結束/開始日期，不帶=不改
 async function transferTicket(id, info, chgUserId, endTime, startTime) {
-  const body = { info, chg_user_id: chgUserId };
+  const body = { info: newlinesToBr(info), chg_user_id: chgUserId };
   if (endTime) body.end_time = endTime;
   if (startTime) body.start_time = startTime;
   const res = await client().post(`/tickets/${id}/transfer`, body);
