@@ -173,21 +173,21 @@
         <div id="screen-blacklist" class="screen-grid"></div>
 
         <h4>屏幕電源模式(推送給屏幕，下次連線時套用)</h4>
-        <p class="screen-sub">插著 USB 充電時屏幕<b>永遠不休眠</b>，不管選哪種模式。電子紙長時間顯示同一張圖會殘影，所以斷線太久會自動清成白色；長期收納前也可在屏幕上<b>按住綠鍵 5 秒</b>手動清除(按綠鍵或「恢復顯示」再回來)。</p>
+        <p class="screen-sub">插著 USB 充電時屏幕<b>永遠不休眠</b>，不管選哪種模式。電子紙長時間顯示同一張圖會殘影，所以<b>定時抓取不到資料時會自動清成白色再休眠</b>(連上後自動恢復)；長期收納前也可在屏幕上<b>按住綠鍵 5 秒</b>手動清除(按綠鍵或「恢復顯示」再回來)。</p>
         <div class="screen-grid">
           <label>模式
             <select id="screen-power-mode">
-              <option value="smart">1. 智慧：上班時段保持連線(即時)，下班/連不上就睡眠並定時醒來</option>
-              <option value="periodic">2. 定時：每 N 分鐘醒來抓一次，平時睡眠(最省電)</option>
-              <option value="always_on">3. 一律保持連線(即時，耗電較多)</option>
+              <option value="smart">1. 智慧：上班時段連得上就即時；下班時段定時醒來抓一次；抓不到就清畫面休眠</option>
+              <option value="periodic">2. 定時：每 N 分鐘醒來抓一次，抓不到就清畫面休眠(最省電)</option>
+              <option value="always_on">3. 一直保持連線：不管幾點，連得上就即時；連不上就清畫面休眠，每 N 分鐘再試(耗電較多)</option>
             </select>
           </label>
         </div>
         <div class="screen-grid">
-          <label>模式1：下班/連不上時，每幾分鐘醒來(0=不定時)
+          <label>模式1：下班時段/連不上時，每幾分鐘醒來抓一次(0=睡到下個上班時段)
             <input type="text" id="screen-off-wake-min" />
           </label>
-          <label>模式2：每幾分鐘醒來抓一次
+          <label>模式2、3：每幾分鐘醒來抓一次(模式3 連不上時的重試間隔)
             <input type="text" id="screen-wake-min" />
           </label>
           <label>上班時段開始
@@ -199,7 +199,7 @@
           <label>電量低於幾 % 不再保持連線
             <input type="text" id="screen-low-battery" />
           </label>
-          <label>斷線超過幾分鐘清除畫面(0=不清除；1440=24小時)
+          <label>抓不到資料時清除畫面(填 0=不清除，大於 0=清除)
             <input type="text" id="screen-clear-hours" />
           </label>
           <label>校時伺服器(NTP)

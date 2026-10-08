@@ -5,9 +5,9 @@
   "totals": { "todo": 31, "review": 12, "overdue": 4 },
   "engineers": [
     { "name": "王大明", "todo": 8, "review": 2, "overdue": 2 },
-    { "name": "林志豪", "todo": 6, "review": 3, "overdue": 1 },
+    { "name": "林志豪", "todo": 6, "review": 3, "review_delta": 2, "overdue": 1 },
     { "name": "陳怡君", "todo": 5, "review": 1, "overdue": 0 },
-    { "name": "張家瑋", "todo": 4, "review": 4, "overdue": 1 },
+    { "name": "張家瑋", "todo": 4, "review": 4, "review_delta": -1, "overdue": 1 },
     { "name": "黃柏翰", "todo": 3, "review": 0, "overdue": 0 },
     { "name": "李宗憲", "todo": 3, "review": 1, "overdue": 0 },
     { "name": "吳佩珊", "todo": 2, "review": 1, "overdue": 0 },

@@ -1,11 +1,13 @@
 // 電源與休眠規則：每一輪(開機/醒來/保持連線時每分鐘)依當下狀況算出「接下來怎麼做」
 //   1. 插USB充電(且 usbAlwaysOn)      → 保持連線，不休眠，WiFi全速
-//   2. always_on                        → 保持連線(WiFi省電)
-//   3. periodic                         → 深度睡眠，每 wakeMin 分鐘醒來抓一次
+//   2. always_on   連得上MQTT → 保持連線(WiFi省電)，不管幾點都即時收推送
+//   3. periodic    深度睡眠，每 wakeMin 分鐘醒來抓一次
 //   4. smart(預設)
 //        電量低於 lowBatteryPct         → 深度睡眠(保命)，每 offWakeMin 分鐘醒來
-//        上班時段 且 連得上MQTT         → 保持連線(WiFi省電)，即時收推送
-//        其餘(下班時段/連不上)          → 深度睡眠，每 offWakeMin 分鐘醒來(0=睡到下個上班時段)，沒資料就繼續睡
+//        連得上MQTT 且在上班時段        → 保持連線(WiFi省電)，即時收推送
+//        連得上MQTT 但下班時段          → 深度睡眠，每 offWakeMin 分鐘醒來抓一次(0=睡到下個上班時段)
+//   連不上MQTT(定時抓取失敗/保持連線時斷線超過緩衝) → clearScreen=true：清除畫面後深度睡眠，等下次定時再試
+//        (always_on 的間隔用 wakeMin，periodic 用 wakeMin，smart 用 offWakeMin)
 // 任一按鍵隨時可喚醒
 #pragma once
 #include <Arduino.h>
@@ -21,6 +23,7 @@ struct PowerPlan {
   bool stayOnline = false;
   bool fullSpeed = false;    // 保持連線時用全速(插USB)；false=WiFi省電+降頻
   uint32_t sleepSeconds = 0; // stayOnline=false時要睡幾秒
+  bool clearScreen = false;  // 睡之前先把畫面清成白色(連不上MQTT，資料已過期)
   const char *reason = "";   // 給status/log看的原因代碼
 };
 

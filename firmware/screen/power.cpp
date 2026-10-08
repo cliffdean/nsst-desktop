@@ -48,14 +48,26 @@ PowerPlan powerPlan(const AppConfig &cfg, const PowerContext &ctx) {
     p.reason = "usb";
     return p;
   }
-  if (cfg.powerMode == "always_on") {
-    p.stayOnline = true;
-    p.reason = "always_on";
-    return p;
-  }
   uint32_t periodic = (uint32_t)max(1, cfg.wakeMin) * 60;
+  // 連不上MQTT(抓取失敗)：清除畫面後睡眠，等下次定時再試。是否真的清由主程式依 clearOfflineMin 與畫面狀態決定
+  auto unreachable = [&](uint32_t sleepSeconds) {
+    p.sleepSeconds = sleepSeconds;
+    p.clearScreen = true;
+    p.reason = "unreachable";
+    return p;
+  };
+  if (cfg.powerMode == "always_on") {
+    if (ctx.mqttOk) {
+      p.stayOnline = true;
+      p.reason = "always_on";
+      return p;
+    }
+    return unreachable(periodic);
+  }
   if (cfg.powerMode == "periodic") {
-    p.sleepSeconds = cfg.periodicInWindowOnly ? secondsUntilWindow(cfg, periodic) : periodic;
+    uint32_t s = cfg.periodicInWindowOnly ? secondsUntilWindow(cfg, periodic) : periodic;
+    if (!ctx.mqttOk) return unreachable(s);
+    p.sleepSeconds = s;
     p.reason = "periodic";
     return p;
   }
@@ -67,13 +79,14 @@ PowerPlan powerPlan(const AppConfig &cfg, const PowerContext &ctx) {
     p.reason = "low_battery";
     return p;
   }
-  if (powerInWorkWindow(cfg) && ctx.mqttOk) {
+  if (!ctx.mqttOk) return unreachable(offSleep());
+  if (powerInWorkWindow(cfg)) {
     p.stayOnline = true;
     p.reason = "work_online";
     return p;
   }
   p.sleepSeconds = offSleep();
-  p.reason = ctx.mqttOk ? "off_hours" : "unreachable";
+  p.reason = "off_hours";
   return p;
 }
 

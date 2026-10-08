@@ -21,9 +21,9 @@ const SCREEN_DEFAULTS = {
   // 成功的單已經不需要工程師再動作。(專案欄的待審核仍依下面的狀態分類)
   engineerReviewIncludeSuccess: false,
   // 屏幕配置(推送給屏幕，屏幕下次連線時套用)。插USB充電時屏幕一律不休眠，不管哪種模式
-  //   smart     上班時段內連得上MQTT就保持連線(WiFi省電、即時收推送)；下班時段/連不上就深度睡眠，每offWakeMin分鐘醒來抓一次
-  //   periodic  每wakeMin分鐘醒來抓一次，平時深度睡眠
-  //   always_on 一律保持連線
+  //   smart     上班時段內連得上MQTT就保持連線(即時收推送)；下班時段每offWakeMin分鐘醒來抓一次；抓不到就清除畫面後睡眠
+  //   periodic  每wakeMin分鐘醒來抓一次，平時深度睡眠；抓不到就清除畫面後睡眠
+  //   always_on 不管幾點，連得上MQTT就一直保持連線；連不上就清除畫面後睡眠，每wakeMin分鐘醒來再試
   powerMode: 'smart',
   wakeMin: 30, // periodic：醒來間隔(分鐘)
   offWakeMin: 30, // smart：下班時段/連不上時的醒來間隔(分鐘)，0=不定時醒來(睡到下個上班時段開始)
@@ -33,7 +33,7 @@ const SCREEN_DEFAULTS = {
   periodicInWindowOnly: false, // periodic：只在上班時段內醒來
   usbAlwaysOn: true, // 插USB時不休眠
   lowBatteryPct: 15, // 電量低於這個值，屏幕不再保持連線(保命)
-  clearOfflineMin: 1440, // 斷線超過幾「分鐘」就把螢幕清成白色(電子紙長時間顯示同一張圖會殘影、縮短壽命)，連線恢復自動重畫；0=不清除
+  clearOfflineMin: 1440, // 抓不到資料(連不上MQTT)時是否把螢幕清成白色再睡：大於0=清除(數值只當開關)，0=不清除；連線恢復自動重畫
   ntpServer: 'pool.ntp.org', // 屏幕校時用；公司網路擋外部NTP時改成內部的
   tzHours: 8,
   hostOverride: '', // 屏幕連線用的桌面工具IP；空=自動偵測

@@ -24,9 +24,9 @@ struct AppConfig {
   String deviceId = "e1002";
 
   // 電源模式(插USB充電時一律不休眠，不管哪種模式)：
-  //   smart      上班時段內連得上MQTT就保持連線(WiFi省電)；晚上或連不上就深度睡眠，每 offWakeMin 分鐘醒來抓一次，沒資料就繼續睡
-  //   periodic   每 wakeMin 分鐘醒來抓一次資料，平時深度睡眠
-  //   always_on  一律保持連線
+  //   smart      上班時段內連得上MQTT就保持連線(即時)；下班時段每 offWakeMin 分鐘醒來抓一次；抓不到就清除畫面後睡眠
+  //   periodic   每 wakeMin 分鐘醒來抓一次資料，平時深度睡眠；抓不到就清除畫面後睡眠
+  //   always_on  不管幾點，連得上MQTT就一直保持連線(即時)；連不上就清除畫面後睡眠，每 wakeMin 分鐘醒來再試
   String powerMode = "smart";
   int wakeMin = 30;        // periodic：醒來間隔
   int offWakeMin = 30;     // smart：下班時段/連不上時的醒來間隔，0=不定時醒來(睡到下個上班時段開始)
@@ -36,7 +36,7 @@ struct AppConfig {
   bool periodicInWindowOnly = false; // periodic：只在上班時段內醒來
   bool usbAlwaysOn = true;  // 插USB時不休眠
   int lowBatteryPct = 15;   // 電量低於這個值不再保持連線，改深度睡眠保命
-  int clearOfflineMin = 1440; // 斷線(沒成功連上MQTT)超過幾分鐘就把螢幕清成白色，保護電子紙(長時間顯示同一張圖會殘影)；0=不清除
+  int clearOfflineMin = 1440; // 抓不到資料(連不上MQTT)時是否清除畫面再睡：>0=清除(數值不再當等待時間用)，0=不清除；清除可避免舊資料誤導與電子紙殘影
   bool lightSleep = false;  // 實驗：保持連線時嘗試輕度睡眠(目前工具鏈未開啟自動輕度睡眠，預設關)
 
   String ntp = "pool.ntp.org";

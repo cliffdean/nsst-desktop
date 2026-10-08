@@ -261,15 +261,12 @@ static void drawClear(uint8_t parkMode) {
   boardLed(false);
 }
 
-// 斷線太久：自動清除。回傳是否清了
-static bool maybeAutoClear() {
-  if (cfg.clearOfflineMin <= 0 || !clockValid() || parkedState() != 0) return false;
-  uint32_t okAt = prefs.getUInt("ok_at", 0);
-  if (okAt == 0) return false; // 從沒成功同步過(全新/剛設定)，不算斷線
-  time_t now = time(nullptr);
-  if (now < (time_t)okAt || (uint32_t)(now - okAt) < (uint32_t)cfg.clearOfflineMin * 60) return false;
-  drawClear(1);
-  return true;
+// 連不上MQTT(定時抓取失敗/保持連線時斷線太久)時，睡之前是否要先把畫面清掉：
+// 要有設桌面工具、清除功能沒關(clearOfflineMin=0 代表不清)、畫面上真的有資料(已經是白的/設定畫面/等待畫面就不用清)
+static bool shouldClearBeforeSleep() {
+  if (!plan.clearScreen || cfg.clearOfflineMin <= 0 || !cfg.hasMqtt() || parkedState() != 0) return false;
+  String rev = drawnRev();
+  return !(rev.isEmpty() || rev == kClearRev || rev == "-setup" || rev == "-wait");
 }
 
 // ---------------- 收到的訊息 ----------------
@@ -382,6 +379,7 @@ static void replan() {
   PowerPlan next = powerPlan(cfg, pctx);
   if (!cfg.hasMqtt() && netWifiConnected() && (int32_t)(needSetupDeadline - millis()) > 0) { // 還沒設桌面工具：留著HTTP設定介面等桌面工具來寫設定
     next.stayOnline = true;
+    next.clearScreen = false;
     next.reason = "need_setup";
   }
   bool speedChanged = next.fullSpeed != plan.fullSpeed;
@@ -437,6 +435,7 @@ static void runCycle() {
   plan = powerPlan(cfg, pctx);
   if (wifi && !cfg.hasMqtt()) {
     plan.stayOnline = true;
+    plan.clearScreen = false;
     plan.reason = "need_setup";
     needSetupDeadline = millis() + kNeedSetupWindowMs;
   }
@@ -450,8 +449,9 @@ static void runCycle() {
   if (need) {
     drawNow();
     drew = true;
-  } else if (!mq) {
-    drew = maybeAutoClear();
+  } else if (!mq && wakeCause != "key" && shouldClearBeforeSleep()) {
+    drawClear(1); // 定時抓取不到：清除畫面再睡(按鍵喚醒不算，使用者只是想看畫面)；之後連上MQTT拿到資料會自動恢復
+    drew = true;
   }
   if (!drew && statusStale()) drawNow(); // 上次畫完後USB拔插/模式變了，狀態列要更新
   if (mq) publishStatus();
@@ -606,7 +606,8 @@ void loop() {
       publishStatus();
     }
     if (!plan.stayOnline) {
-      if (statusStale()) drawNow(); // 睡著前把狀態列更新成「省電模式」，不要留著過期的「USB 供電」
+      if (shouldClearBeforeSleep()) drawClear(1); // 保持連線時MQTT斷線超過緩衝：清除畫面再睡
+      else if (statusStale()) drawNow(); // 睡著前把狀態列更新成「省電模式」，不要留著過期的「USB 供電」
       Serial.printf("[main] leaving online: %s\n", plan.reason);
       publishStatus();
       goSleep();

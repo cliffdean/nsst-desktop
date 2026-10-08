@@ -122,6 +122,12 @@ static void drawEngineers(JsonArrayConst engineers, int page) {
     textDraw(e["name"] | "", LEFT_X, cy, 17, TFT_BLACK, overdue > 0 ? TFT_YELLOW : TFT_WHITE, FontWeight::Regular, TextAlign::Left, nameW);
     count(todo, todoR, cy, 18, TFT_RED);
     count(review, reviewR, cy, 18, TFT_BLUE);
+    // 待審核相較上次刷新的變化：+N(變多)用藍字、-N(變少)用綠字，放在待審核數字右側、逾期色塊左側之間
+    int delta = e["review_delta"] | 0;
+    if (delta != 0) {
+      String d = (delta > 0 ? "+" : "-") + String(abs(delta));
+      textDraw(d, reviewR + 4, cy, 13, delta > 0 ? TFT_BLUE : TFT_GREEN, TFT_WHITE, FontWeight::Bold, TextAlign::Left, overdueX - reviewR - 6);
+    }
     // 逾期數量：黃底小色塊，沒有逾期就留白
     if (overdue > 0) {
       String o = String(overdue);
