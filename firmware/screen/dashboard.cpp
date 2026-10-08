@@ -66,6 +66,32 @@ static void drawHeader(JsonObjectConst root, const DeviceStatus &st) {
   if (st.nextSync.length()) textDraw("下次同步 " + st.nextSync, right, HEADER_H / 2, 16, TFT_WHITE, TFT_BLACK, FontWeight::Regular, TextAlign::Right);
 }
 
+// 相較上次內容變化的量：變多用該欄的顏色(待處理紅/待審核藍/逾期黑)，變少用綠色；0不畫。回傳佔用寬度(0=沒畫)
+// right=false：x是左緣往右畫(寬度超過maxW會被裁)；right=true：x是右緣往左畫
+static int deltaTag(int delta, int x, int cy, uint16_t upColor, bool rightAlign = false, int maxW = 0) {
+  if (delta == 0) return 0;
+  String d = String(delta > 0 ? "+" : "-") + String(abs(delta));
+  uint16_t color = delta > 0 ? upColor : TFT_GREEN;
+  int w = textWidth(d, 13, FontWeight::Bold);
+  textDraw(d, x, cy, 13, color, TFT_WHITE, FontWeight::Bold, rightAlign ? TextAlign::Right : TextAlign::Left, maxW);
+  return w;
+}
+
+static int deltaWidth(int delta) {
+  return delta == 0 ? 0 : textWidth(String(delta > 0 ? "+" : "-") + String(abs(delta)), 13, FontWeight::Bold) + 3;
+}
+
+// 專案列的一個「標籤+數字」色塊(由右往左排，px是目前右緣，畫完會往左移)；變化量放在色塊右側
+static void metricPill(int &px, int cy, const char *label, int value, int delta, uint16_t bg, uint16_t fg, uint16_t upColor, bool showPill) {
+  int g = deltaWidth(delta);
+  px -= g;
+  deltaTag(delta, px + 3, cy, upColor);
+  if (showPill) {
+    px -= pillWidth(label, String(value), 14, 16);
+    pill(px, cy, 24, label, String(value), bg, fg, 14, 16);
+  }
+}
+
 static void legend(int right, int cy) {
   int x = right;
   x -= textWidth("待審核", 14);
@@ -122,18 +148,18 @@ static void drawEngineers(JsonArrayConst engineers, int page) {
     textDraw(e["name"] | "", LEFT_X, cy, 17, TFT_BLACK, overdue > 0 ? TFT_YELLOW : TFT_WHITE, FontWeight::Regular, TextAlign::Left, nameW);
     count(todo, todoR, cy, 18, TFT_RED);
     count(review, reviewR, cy, 18, TFT_BLUE);
-    // 待審核相較上次刷新的變化：+N(變多)用藍字、-N(變少)用綠字，放在待審核數字右側、逾期色塊左側之間
-    int delta = e["review_delta"] | 0;
-    if (delta != 0) {
-      String d = (delta > 0 ? "+" : "-") + String(abs(delta));
-      textDraw(d, reviewR + 4, cy, 13, delta > 0 ? TFT_BLUE : TFT_GREEN, TFT_WHITE, FontWeight::Bold, TextAlign::Left, overdueX - reviewR - 6);
-    }
+    // 三個數字相較上次內容的變化量，緊貼在各自數字右側：待處理夾在待處理與待審核數字之間(空間較窄)，待審核在逾期色塊左側
+    deltaTag(e["todo_delta"] | 0, todoR + 4, cy, TFT_RED, false, reviewR - todoR - 28);
+    deltaTag(e["review_delta"] | 0, reviewR + 4, cy, TFT_BLUE, false, overdueX - reviewR - 6);
     // 逾期數量：黃底小色塊，沒有逾期就留白
     if (overdue > 0) {
       String o = String(overdue);
       int w = max(26, textWidth(o, 15, FontWeight::Bold) + 14);
       epaper.fillRoundRect(overdueX, cy - 10, w, 20, 4, TFT_YELLOW);
       textDraw(o, overdueX + w / 2, cy, 15, TFT_BLACK, TFT_YELLOW, FontWeight::Bold, TextAlign::Center);
+      deltaTag(e["overdue_delta"] | 0, overdueX + w + 4, cy, TFT_BLACK);
+    } else {
+      deltaTag(e["overdue_delta"] | 0, overdueX, cy, TFT_BLACK); // 逾期清零了：色塊消失，只留下 -N 讓人知道是清掉的
     }
   }
 }
@@ -278,14 +304,12 @@ static void drawProjects(JsonArrayConst projects, int page, int totalPages) {
       px -= pillWidth("", "✓ 已清空", 14, 15);
       pill(px, cy, 24, "", "✓ 已清空", TFT_GREEN, TFT_WHITE, 14, 15);
     } else {
-      px -= pillWidth("審", String(review), 14, 16);
-      pill(px, cy, 24, "審", String(review), review ? TFT_BLUE : TFT_WHITE, review ? TFT_WHITE : TFT_BLACK, 14, 16);
-      px -= 6 + pillWidth("待", String(todo), 14, 16);
-      pill(px, cy, 24, "待", String(todo), todo ? TFT_RED : TFT_WHITE, todo ? TFT_WHITE : TFT_BLACK, 14, 16);
-      if (overdue > 0) {
-        px -= 6 + pillWidth("逾", String(overdue), 14, 16);
-        pill(px, cy, 24, "逾", String(overdue), TFT_YELLOW, TFT_BLACK, 14, 16);
-      }
+      // 由右往左：審、待、逾。每個色塊右側放它的變化量(相較上次內容)，逾期清零了色塊消失但仍留下 -N
+      metricPill(px, cy, "審", review, p["review_delta"] | 0, review ? TFT_BLUE : TFT_WHITE, review ? TFT_WHITE : TFT_BLACK, TFT_BLUE, true);
+      px -= 6;
+      metricPill(px, cy, "待", todo, p["todo_delta"] | 0, todo ? TFT_RED : TFT_WHITE, todo ? TFT_WHITE : TFT_BLACK, TFT_RED, true);
+      px -= 6;
+      metricPill(px, cy, "逾", overdue, p["overdue_delta"] | 0, TFT_YELLOW, TFT_BLACK, TFT_BLACK, overdue > 0);
     }
     textDraw(p["name"] | "", RIGHT_X, cy, 18, TFT_BLACK, TFT_WHITE, FontWeight::Bold, TextAlign::Left, px - RIGHT_X - 10);
 
