@@ -404,7 +404,7 @@
               <button id="btn-apply-template" type="button">依工單類型套用回覆範本</button>
             </div>
             <label>Commit訊息(產生後可直接複製去 git commit，或用下方按鈕直接由本工具執行)
-              <input type="text" id="reply-commit-message" readonly />
+              <textarea id="reply-commit-message" rows="4"></textarea>
               <button id="btn-copy-commit">複製</button>
             </label>
             <div class="actions">
@@ -472,7 +472,7 @@
             <textarea id="batch-reply-info" rows="8"></textarea>
           </label>
           <label>Commit訊息(產生後可直接複製去 git commit，批次不提供自動commit，請自行手動執行)
-            <input type="text" id="batch-reply-commit-message" readonly />
+            <textarea id="batch-reply-commit-message" rows="4"></textarea>
             <button id="btn-batch-copy-commit">複製</button>
           </label>
           <label>標記狀態

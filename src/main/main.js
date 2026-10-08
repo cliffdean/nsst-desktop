@@ -597,7 +597,7 @@ handle('window:jump-in-main', (target, id) => {
 
 handle('dialog:pick-file', async () => {
   const { dialog } = require('electron');
-  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'] });
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] });
   if (result.canceled || !result.filePaths.length) return null;
-  return result.filePaths[0];
+  return result.filePaths;
 });

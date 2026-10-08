@@ -2303,13 +2303,25 @@ function renderTicketList() {
   });
 }
 
+// commit訊息最前面固定加上「#工單號」(多張工單就「#1 #2 」)；AI已經自己加過就不重複
+function withTicketPrefix(message, ticketIds) {
+  const msg = (message || '').trim();
+  if (!msg) return '';
+  const prefix = ticketIds.map((id) => `#${id}`).join(' ');
+  return msg.startsWith(prefix) ? msg : `${prefix} ${msg.replace(/^(#\d+\s*)+/, '')}`;
+}
+
 async function pickAndAttachForCard(ticketId) {
-  const filePath = await call(window.api.dialog.pickFile());
-  if (!filePath) return;
-  const uploaded = await call(window.api.eip.uploadFile(filePath), (err) => alert('上傳失敗：' + err));
-  if (!uploaded) return;
-  await call(window.api.eip.attachFile(ticketId, uploaded.file_id), (err) => alert('附加到工單失敗：' + err));
-  alert('已附加到工單');
+  const filePaths = await call(window.api.dialog.pickFile());
+  if (!filePaths) return;
+  let okCount = 0;
+  for (const filePath of filePaths) {
+    const uploaded = await call(window.api.eip.uploadFile(filePath), (err) => alert('上傳失敗：' + err));
+    if (!uploaded) continue;
+    const attached = await call(window.api.eip.attachFile(ticketId, uploaded.file_id), (err) => alert('附加到工單失敗：' + err));
+    if (attached) okCount++;
+  }
+  if (okCount) alert(`已附加 ${okCount} 個檔案到工單`);
 }
 
 // ---------------- 批次選取／提交(同一個專案的多張工單可以一起送出) ----------------
@@ -2578,7 +2590,7 @@ async function generateBatchAiReply() {
   if (!result) return;
 
   $('batch-reply-info').value = result.reply || '';
-  $('batch-reply-commit-message').value = result.commitMessage || '';
+  $('batch-reply-commit-message').value = withTicketPrefix(result.commitMessage, selected.map((t) => t.id));
   $('batch-ai-status').textContent = '已產生，請自行確認/編輯後再送出(批次不會自動執行git commit，commit訊息請自行複製手動提交)。';
 }
 
@@ -2895,15 +2907,19 @@ function renderAttachments(ticket) {
 }
 
 async function pickAndUploadForDetail() {
-  const filePath = await call(window.api.dialog.pickFile());
-  if (!filePath) return;
-  $('pending-files-text').textContent = '上傳中...';
-  const uploaded = await call(window.api.eip.uploadFile(filePath), (err) => {
-    $('pending-files-text').textContent = '上傳失敗：' + err;
-  });
-  if (!uploaded) return;
-  state.pendingFileIds.push(uploaded.file_id);
-  $('pending-files-text').textContent = `已上傳待送出：${uploaded.files.map((f) => f.original_filename).join('、')}(送出回覆時會一起附加)`;
+  const filePaths = await call(window.api.dialog.pickFile());
+  if (!filePaths) return;
+  const names = [];
+  for (let i = 0; i < filePaths.length; i++) {
+    $('pending-files-text').textContent = `上傳中... (${i + 1}/${filePaths.length})`;
+    const uploaded = await call(window.api.eip.uploadFile(filePaths[i]), (err) => {
+      $('pending-files-text').textContent = '上傳失敗：' + err;
+    });
+    if (!uploaded) return;
+    state.pendingFileIds.push(uploaded.file_id);
+    names.push(...uploaded.files.map((f) => f.original_filename));
+  }
+  $('pending-files-text').textContent = `已上傳待送出：${names.join('、')}(送出回覆時會一起附加)`;
 }
 
 function updateDetailTimerDisplay() {
@@ -3352,7 +3368,8 @@ async function generateAiReply() {
   if (!result) return;
 
   $('reply-info').value = result.reply || '';
-  $('reply-commit-message').value = result.commitMessage || '';
+  result.commitMessage = withTicketPrefix(result.commitMessage, [state.currentTicket.id]);
+  $('reply-commit-message').value = result.commitMessage;
   const canCommit = mode === 'uncommitted' && !!result.commitMessage;
   $('btn-do-git-commit').classList.toggle('hidden', !canCommit);
   $('ai-status').textContent = `已產生(套用git路徑：${repoPathForStatus})，請自行確認/編輯後再送出${

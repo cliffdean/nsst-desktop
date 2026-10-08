@@ -599,6 +599,13 @@ ${batchFailedText(failed)}`
 
 // 一則回覆：回覆人／時間／當時標記的狀態、實際工作時段與耗時、回覆內容(EIP富文本HTML)、附檔
 // collapsible=true時(左側工單詳情)：預設收起，只留回覆頭一行，點擊後才展開內容，避免回覆一多畫面被拉得很長
+// 回覆內容是後端存的HTML；桌面工具送出的純文字換行沒有轉成標籤，顯示時補上<br>(已有區塊標籤的就維持原樣)
+function replyBodyHtml(reply) {
+  if (!reply) return '(無內容)';
+  if (/<(br|p|div|li|ul|ol|table|pre)[\s/>]/i.test(reply)) return reply;
+  return String(reply).replace(/\r\n|\r|\n/g, '<br>');
+}
+
 function ticketReplyHtml(r, collapsible = false) {
   const workStart = validTime(r.work_start_time);
   const workEnd = validTime(r.work_end_time);
@@ -618,7 +625,7 @@ function ticketReplyHtml(r, collapsible = false) {
     </div>
     <div class="ts-reply-content">
       ${workLine}
-      <div class="ts-reply-body">${r.reply || '(無內容)'}</div>
+      <div class="ts-reply-body">${replyBodyHtml(r.reply)}</div>
       ${files}
     </div>
   </div>`;
