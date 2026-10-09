@@ -506,6 +506,7 @@ handle('eip:update-ticket-version', (id, version) => eipApi.updateTicketVersion(
 handle('eip:delete-ticket', (id, reason) => eipApi.deleteTicket(id, reason));
 handle('eip:add-ticket-version', (name) => eipApi.addTicketVersion(name));
 handle('eip:upload-file', (filePath) => eipApi.uploadFile(filePath));
+handle('eip:upload-data', (data, filename) => eipApi.uploadBuffer(Buffer.from(data), filename));
 handle('eip:attach-file', (id, fileId) => eipApi.attachFile(id, fileId));
 
 function timerWithLive(ticketId) {

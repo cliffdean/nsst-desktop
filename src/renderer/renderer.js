@@ -16,7 +16,8 @@ const state = {
   activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單
   viewUserId: null, // 左側清單目前在看哪位工程師的工單；null=自己(每次開App都從自己開始，不記憶)
   engineers: [],
-  pendingFileIds: [], // 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
+  pendingFileNames: [], // 對應pendingFileIds的檔名，顯示用
+  pendingFileIds: [],// 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
   todos: [],
   starredProjects: new Set(), // 加星關注的專案id(字串)，純本地功能，不回寫EIP
   advSearch: {
@@ -320,15 +321,16 @@ function mailFormValues() {
 }
 
 async function testMailConnection() {
-  $('settings-message').textContent = '測試信箱連線中...';
+  // 結果顯示在測試按鈕正下方，不然在頁面最下面的 settings-message 看不到
+  $('mail-test-message').textContent = '測試信箱連線中...';
   const result = await call(window.api.mail.listRecent(5, mailFormValues()), (err) => {
-    $('settings-message').textContent = '信箱連線失敗：' + err;
+    $('mail-test-message').textContent = '信箱連線失敗：' + err;
   });
   if (result) {
     const saved = (state.settings && state.settings.mail) || {};
     const form = mailFormValues();
     const unsaved = ['username', 'password', 'imapHost', 'imapPort', 'imapAllowInsecureTLS'].some((k) => String(saved[k] || '') !== String(form[k] || ''));
-    $('settings-message').textContent = `信箱連線成功，共${result.messages.length}封(未讀${result.unseenCount}封)${unsaved ? '　→ 確認無誤請按「儲存設定」套用' : ''}`;
+    $('mail-test-message').textContent = `信箱連線成功，共${result.messages.length}封(未讀${result.unseenCount}封)${unsaved ? '　→ 確認無誤請按「儲存設定」套用' : ''}`;
   }
 }
 
@@ -2909,17 +2911,36 @@ function renderAttachments(ticket) {
 async function pickAndUploadForDetail() {
   const filePaths = await call(window.api.dialog.pickFile());
   if (!filePaths) return;
-  const names = [];
-  for (let i = 0; i < filePaths.length; i++) {
-    $('pending-files-text').textContent = `上傳中... (${i + 1}/${filePaths.length})`;
-    const uploaded = await call(window.api.eip.uploadFile(filePaths[i]), (err) => {
+  await uploadForDetail(filePaths.map((p) => () => window.api.eip.uploadFile(p)));
+}
+
+// 依序執行上傳(選檔與貼上共用)，成功的 file id 與檔名累加到待送出清單
+async function uploadForDetail(uploaders) {
+  for (let i = 0; i < uploaders.length; i++) {
+    $('pending-files-text').textContent = `上傳中... (${i + 1}/${uploaders.length})`;
+    const uploaded = await call(uploaders[i](), (err) => {
       $('pending-files-text').textContent = '上傳失敗：' + err;
     });
     if (!uploaded) return;
     state.pendingFileIds.push(uploaded.file_id);
-    names.push(...uploaded.files.map((f) => f.original_filename));
+    state.pendingFileNames.push(...uploaded.files.map((f) => f.original_filename));
   }
-  $('pending-files-text').textContent = `已上傳待送出：${names.join('、')}(送出回覆時會一起附加)`;
+  $('pending-files-text').textContent = `已上傳待送出：${state.pendingFileNames.join('、')}(送出回覆時會一起附加)`;
+}
+
+// 在詳情頁按 Ctrl+V 貼上剪貼簿裡的圖片／檔案，直接上傳並暫存等送出回覆時附加
+async function onDetailPaste(e) {
+  if (!state.currentTicket || $('reply-info').offsetParent === null) return;
+  const files = [...(e.clipboardData ? e.clipboardData.files : [])];
+  if (!files.length) return; // 純文字照常貼進輸入框
+  e.preventDefault();
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  const uploaders = files.map((f, i) => async () => {
+    const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+    const name = f.name && !/^image\.\w+$/i.test(f.name) ? f.name : `貼上圖片_${stamp}${files.length > 1 ? '_' + (i + 1) : ''}.${ext}`;
+    return window.api.eip.uploadData(new Uint8Array(await f.arrayBuffer()), name);
+  });
+  await uploadForDetail(uploaders);
 }
 
 function updateDetailTimerDisplay() {
@@ -3084,6 +3105,7 @@ async function openTicketDetail(id) {
   $('git-commit-status').textContent = '';
   $('pending-files-text').textContent = '';
   state.pendingFileIds = [];
+  state.pendingFileNames = [];
   renderAttachments(ticket);
   renderReplies(ticket);
 
@@ -3470,6 +3492,7 @@ async function submitReply() {
   if (!result) return;
 
   state.pendingFileIds = [];
+  state.pendingFileNames = [];
   await window.api.timer.reset(state.currentTicket.id);
   delete state.timers[state.currentTicket.id];
   $('detail-message').textContent = '已送出，回到清單...';
@@ -3681,6 +3704,7 @@ $('btn-clear-hotkey').addEventListener('click', () => {
 });
 $('btn-generate').addEventListener('click', generateAiReply);
 $('btn-pick-attach-file').addEventListener('click', pickAndUploadForDetail);
+document.addEventListener('paste', onDetailPaste);
 $('ticket-type-select').addEventListener('change', onTicketTypeChange);
 $('btn-apply-template').addEventListener('click', applyReplyTemplate);
 document

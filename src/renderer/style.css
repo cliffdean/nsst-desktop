@@ -611,7 +611,7 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .batch-time-row .batch-time-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
 .batch-time-row .batch-time-head strong { color: #222; }
 .batch-time-manual-summary { margin: 4px 0; }
-#settings-message, #detail-message, #ai-status, #batch-message { color: #2f6fd8; min-height: 14px; }
+#settings-message, #mail-test-message, #detail-message, #ai-status, #batch-message { color: #2f6fd8; min-height: 14px; }
 
 .git-source-toggle { display: flex; gap: 16px; font-size: 13px; margin-bottom: 8px; }
 .git-source-toggle label { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }

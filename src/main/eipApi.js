@@ -181,12 +181,16 @@ async function attachFile(id, fileId) {
 async function uploadFile(filePath) {
   const fs = require('fs');
   const path = require('path');
+  return uploadBuffer(fs.readFileSync(filePath), path.basename(filePath));
+}
+
+// 剪貼簿貼上的圖片沒有實體檔案，直接用記憶體內容上傳
+async function uploadBuffer(buffer, filename) {
   const baseURL = settingsStore.get('eipBaseUrl');
   const apiToken = settingsStore.get('apiToken');
 
-  const buffer = fs.readFileSync(filePath);
   const form = new FormData();
-  form.append('files[]', new Blob([buffer]), path.basename(filePath));
+  form.append('files[]', new Blob([buffer]), filename);
 
   const tokenQuery = apiToken ? `?api_token=${encodeURIComponent(apiToken)}` : '';
   const res = await fetch(`${baseURL.replace(/\/?$/, '')}/upload${tokenQuery}`, {
@@ -224,6 +228,7 @@ module.exports = {
   addTicketVersion,
   attachFile,
   uploadFile,
+  uploadBuffer,
   searchInstallLists,
   getInstallListByProject,
   getInstallList,
