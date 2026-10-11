@@ -2,7 +2,7 @@ const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, clipboard, shel
 const path = require('path');
 const fs = require('fs');
 
-const { settingsStore, ticketMetaStore, todoStore, projectStarStore, SCREEN_DEFAULTS, SCREEN_TODO_LIMIT } = require('./store');
+const { settingsStore, ticketMetaStore, todoStore, legacyProjectStarStore, SCREEN_DEFAULTS, SCREEN_TODO_LIMIT } = require('./store');
 const eipApi = require('./eipApi');
 const timerService = require('./timerService');
 const gitService = require('./gitService');
@@ -155,6 +155,32 @@ function openTicketWindow(ticketId) {
   return true;
 }
 
+// 獨立的專案進度視窗(甘特圖)：只開一個，再按就叫到前面
+let progressWindow = null;
+
+function openProgressWindow() {
+  if (progressWindow && !progressWindow.isDestroyed()) {
+    if (progressWindow.isMinimized()) progressWindow.restore();
+    progressWindow.focus();
+    return true;
+  }
+  progressWindow = new BrowserWindow({
+    width: 1440,
+    height: 860,
+    minWidth: 900,
+    minHeight: 480,
+    title: '專案進度',
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  progressWindow.on('closed', () => { progressWindow = null; });
+  progressWindow.loadFile(path.join(__dirname, '..', 'renderer', 'progress.html'));
+  return true;
+}
+
 function toggleWindow() {
   if (!mainWindow) return;
   if (mainWindow.isVisible()) {
@@ -259,7 +285,7 @@ app.whenReady().then(() => {
   });
 });
 
-// ---- 個人資料同步(待辦/計時/工單類型標記/加星/回覆範本存到EIP後端，多台電腦共用) ----
+// ---- 個人資料同步(待辦/計時/工單類型標記/回覆範本存到EIP後端，多台電腦共用) ----
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 let syncing = null;
 
@@ -269,6 +295,7 @@ async function syncNow() {
   syncing = (async () => {
     try {
       const me = await eipApi.whoami();
+      await mergeLegacyProjectStars();
       return await syncService.pull(me.id);
     } catch (err) {
       console.warn('同步個人資料失敗：', err.message);
@@ -278,6 +305,26 @@ async function syncNow() {
     }
   })();
   return syncing;
+}
+
+// 舊版每台電腦各自的加星併進全站共用的加星(只加不減，已經加星的不動)
+// 專案已不存在(404)的直接捨棄；其他失敗(網路/伺服器)的留在本機，下次同步再試，不會因為單筆失敗讓整批併不進去
+async function mergeLegacyProjectStars() {
+  const ids = Object.keys(legacyProjectStarStore.store);
+  if (!ids.length) return;
+  const failed = {};
+  let lastError = null;
+  for (const id of ids) {
+    try {
+      await eipApi.toggleProjectStar(id, true);
+    } catch (err) {
+      if (err.response && err.response.status === 404) continue;
+      failed[id] = true;
+      lastError = err;
+    }
+  }
+  legacyProjectStarStore.store = failed;
+  if (lastError) console.warn(`舊版加星有${Object.keys(failed).length}筆併入共用加星失敗，稍後再試：`, lastError.message);
 }
 
 function clearTodoReminders() {
@@ -379,18 +426,10 @@ handle('ticket-meta:set-type', (ticketId, type) => {
   return type;
 });
 
-// 加星關注的專案：純本地功能，回傳目前所有已加星的project id(字串陣列)
-handle('project-star:list', () => Object.keys(projectStarStore.store));
-handle('project-star:toggle', (projectId) => {
-  const key = String(projectId);
-  const starred = !projectStarStore.get(key, false);
-  if (starred) {
-    projectStarStore.set(key, true);
-  } else {
-    projectStarStore.delete(key);
-  }
-  return starred;
-});
+// 加星關注的專案：存在EIP後端，全站共用(網頁端與所有人的桌面工具看到同一批)
+// list回傳目前所有已加星的project id(字串陣列)，toggle回傳切換後是否已加星
+handle('project-star:list', async () => (await eipApi.listProjectStars()).map(String));
+handle('project-star:toggle', async (projectId) => (await eipApi.toggleProjectStar(projectId)).starred);
 
 handle('todo:list', () => getTodos());
 handle('todo:save', (todo) => {
@@ -485,7 +524,7 @@ handle('eip:search-install-lists', (q) => eipApi.searchInstallLists(q));
 handle('eip:get-install-list-by-project', (projectId) => eipApi.getInstallListByProject(projectId));
 handle('eip:get-install-list', (id, ticketsBeforeId) => eipApi.getInstallList(id, ticketsBeforeId));
 handle('eip:list-engineers', () => eipApi.listEngineers());
-handle('eip:list-projects', (q, status, dept) => eipApi.listProjects(q, status, dept));
+handle('eip:list-projects', (q, status, dept, starredOnly) => eipApi.listProjects(q, status, dept, starredOnly));
 handle('eip:project-dept-transfer', (projectId, dept) => eipApi.projectDeptTransfer(projectId, dept));
 handle('eip:project-payment-update', (projectId, period, status) => eipApi.projectPaymentUpdate(projectId, period, status));
 handle('eip:project-payment-percent-save', (projectId, percents) => eipApi.projectPaymentPercentSave(projectId, percents));
@@ -585,6 +624,8 @@ handle('clipboard:copy', (text) => {
 handle('shell:open-external', (url) => shell.openExternal(url));
 
 handle('window:open-ticket', (ticketId) => openTicketWindow(ticketId));
+handle('window:open-progress', () => openProgressWindow());
+handle('eip:project-progress', (params) => eipApi.getProjectProgress(params));
 // 獨立工單視窗按「查看案場/專案/回覆」：把主視窗叫到前面，交給主視窗切換畫面
 // target: 'site' | 'project'(id=專案id) | 'reply'(id=工單id，在左側開工單詳情回覆)
 handle('window:jump-in-main', (target, id) => {

@@ -92,9 +92,9 @@ const ticketMetaStore = new Store({ name: 'ticket-meta', defaults: {} });
 
 const todoStore = new Store({ name: 'todos', defaults: { items: [] } });
 
-// 加星關注的專案：純本地功能，不回寫EIP，只是方便自己在專案查詢列表裡快速認出要盯的專案
+// 舊版的本機加星(每台電腦各自一份)：加星已改成全站共用存在EIP後端，這裡只留著讓登入後一次併進去，併完就清空
 // { [project_id]: true }
-const projectStarStore = new Store({ name: 'project-stars', defaults: {} });
+const legacyProjectStarStore = new Store({ name: 'project-stars', defaults: {} });
 
 // 電子紙看板的執行狀態(不同步到後端)：最後一份儀表板數據(MQTT保留訊息重啟後要還原)、屏幕最後回報的狀態
 const screenStore = new Store({ name: 'screen-state', defaults: {} });
@@ -102,4 +102,4 @@ const screenStore = new Store({ name: 'screen-state', defaults: {} });
 // 待辦最多幾筆可以推到電子紙(版面只放得下這麼多，也避免把工程師區擠掉)
 const SCREEN_TODO_LIMIT = 4;
 
-module.exports = { SCREEN_TODO_LIMIT, settingsStore, timersStore, ticketMetaStore, todoStore, projectStarStore, screenStore, SCREEN_DEFAULTS };
+module.exports = { SCREEN_TODO_LIMIT, settingsStore, timersStore, ticketMetaStore, todoStore, legacyProjectStarStore, screenStore, SCREEN_DEFAULTS };

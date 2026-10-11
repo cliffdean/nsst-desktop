@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('api', {
     whoami: invoke('eip:whoami'),
     listEngineers: invoke('eip:list-engineers'),
     listProjects: invoke('eip:list-projects'),
+    projectProgress: invoke('eip:project-progress'),
     projectDeptTransfer: invoke('eip:project-dept-transfer'),
     projectPaymentUpdate: invoke('eip:project-payment-update'),
     projectPaymentPercentSave: invoke('eip:project-payment-percent-save'),
@@ -117,6 +118,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   window: {
     openTicket: invoke('window:open-ticket'),
+    openProgress: invoke('window:open-progress'),
     jumpInMain: invoke('window:jump-in-main'),
     onJump: (callback) => ipcRenderer.on('window:jump', (_event, data) => callback(data)),
     onTicketChanged: (callback) => ipcRenderer.on('ticket:changed', (_event, id) => callback(id)),

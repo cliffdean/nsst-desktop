@@ -20,7 +20,7 @@ const state = {
   pendingFileNames: [], // 對應pendingFileIds的檔名，顯示用
   pendingFileIds: [],// 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
   todos: [],
-  starredProjects: new Set(), // 加星關注的專案id(字串)，純本地功能，不回寫EIP
+  starredProjects: new Set(), // 加星關注的專案id(字串)，存在EIP後端，全站共用(網頁端跟所有人的桌面工具同一批)
   advSearch: {
     formVisible: false, // 進階搜尋「表單」是否展開；純UI狀態，收合表單不影響目前是否套用了進階條件
     active: false, // 是否已套用進階條件(搜尋走advanced-search API、上面的簡易搜尋框停用、顯示條件標籤)；收合表單不會動到這個值
@@ -268,7 +268,7 @@ async function doLogin() {
 
 // 一鍵退出(共用電腦用)：主程序會先把待辦/加星等個人資料推到EIP後端，再清掉本機帳密與個人資料，下次登入自動拿回來
 async function doLogout() {
-  if (!confirm('確定要退出嗎？\n\n會清除這台電腦上的EIP Token、信箱帳密、LLM API Key，以及待辦、加星專案、計時等個人資料(已同步到EIP，下次登入會自動拿回來)。')) return;
+  if (!confirm('確定要退出嗎？\n\n會清除這台電腦上的EIP Token、信箱帳密、LLM API Key，以及待辦、計時等個人資料(已同步到EIP，下次登入會自動拿回來)。')) return;
   $('settings-message').textContent = '同步並退出中...';
   let result = await call(window.api.auth.logout(false), (err) => {
     $('settings-message').textContent = '退出失敗：' + err;
@@ -705,7 +705,7 @@ let projectSearchSeq = 0; // 連續打字會發出好幾次搜尋，只採用最
 let projectTicketsSeq = 0;
 // selected = { projectId, stage }，stage為null代表全部階段；ticketStatusFilter是目前勾選的工單狀態代碼集合(可複選，空集合=不篩選)
 // dept：目前所在部門篩選，''=全部、engineering(含退回工程部)、finance
-// starOnly：只看加星的專案(依加星清單逐一用專案編號查詢，不受「最新300筆」限制，狀態/所在部門/關鍵字篩選仍然有效)
+// starOnly：只看加星的專案(後端依全站共用的加星清單篩選，不受「最新300筆」限制，狀態/所在部門/關鍵字篩選仍然有效)
 const projectPanel = { status: '1', dept: '', starOnly: false, projects: [], selected: null, ticketStatusFilter: new Set() };
 
 // 工單狀態篩選按鈕，對照EIP網頁manage/internal/InternalController的$h_status/$h_colors(不含9已刪除，這個列表本來就排除已刪除)
@@ -757,7 +757,7 @@ async function jumpToProject(projectId) {
   card.scrollIntoView({ block: 'center' });
 }
 
-// 加星關注的專案：純本地功能，不回寫EIP，只是方便在列表裡快速認出要盯的專案(背景會上色)
+// 加星關注的專案：存在EIP後端，全站共用(網頁端與所有人的桌面工具同一批)，列表裡背景會上色
 async function loadStarredProjects() {
   const ids = await call(window.api.projectStar.list());
   if (ids) state.starredProjects = new Set(ids.map(String));
@@ -808,47 +808,20 @@ function closeProjectTickets() {
   renderProjectSelection();
 }
 
-// 只看加星：加星清單逐一用「#專案編號」查(後端搜尋接受)，狀態/所在部門照目前的篩選，關鍵字在本地比對
-async function fetchStarredProjects(q, seq) {
-  const ids = [...state.starredProjects];
-  let failed = 0;
-  const found = [];
-  for (let i = 0; i < ids.length; i += 4) { // 每批4個，不一次把後端灌爆
-    const batch = await Promise.all(ids.slice(i, i + 4).map(async (id) => {
-      const list = await call(window.api.eip.listProjects(`#${id}`, projectPanel.status, projectPanel.dept), () => { failed++; });
-      return (list || []).find((p) => String(p.id) === id) || null;
-    }));
-    if (seq !== projectSearchSeq) return null; // 途中又有新的搜尋，這次作廢
-    found.push(...batch.filter(Boolean));
-  }
-  if (failed && !found.length) throw new Error('讀取加星專案失敗，請稍後再試');
-  const kw = q.toLowerCase();
-  const matches = !kw ? found : found.filter((p) => [String(p.id), p.name, p.code, p.customer_name, p.dealer_name].some((v) => String(v || '').toLowerCase().includes(kw)));
-  return matches.sort((a, b) => b.id - a.id);
-}
-
 async function runProjectSearch() {
   const seq = ++projectSearchSeq;
   const q = $('project-search').value.trim();
   $('project-results').innerHTML = '<p style="color:#888;">讀取中...</p>';
-  let projects;
-  if (projectPanel.starOnly) {
-    if (!state.starredProjects.size) {
-      $('project-results').innerHTML = '<p style="color:#888;">還沒有加星的專案。點專案卡片左邊的 ☆ 就能加星關注。</p>';
-      projectPanel.projects = [];
-      return;
-    }
-    try {
-      projects = await fetchStarredProjects(q, seq);
-    } catch (err) {
-      if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err.message)}</p>`;
-      return;
-    }
-  } else {
-    projects = await call(window.api.eip.listProjects(q, projectPanel.status, projectPanel.dept), (err) => {
-      if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err)}</p>`;
-    });
+  await loadStarredProjects(); // 加星是全站共用的，別人加/取消的也要跟著更新
+  if (seq !== projectSearchSeq) return;
+  if (projectPanel.starOnly && !state.starredProjects.size) {
+    $('project-results').innerHTML = '<p style="color:#888;">還沒有加星的專案。點專案卡片左邊的 ☆ 就能加星關注。</p>';
+    projectPanel.projects = [];
+    return;
   }
+  const projects = await call(window.api.eip.listProjects(q, projectPanel.status, projectPanel.dept, projectPanel.starOnly), (err) => {
+    if (seq === projectSearchSeq) $('project-results').innerHTML = `<p style="color:#d84f4f;">查詢失敗：${escapeHtml(err)}</p>`;
+  });
   if (!projects || seq !== projectSearchSeq) return;
   projectPanel.projects = projects;
   if (!projects.length) {
@@ -3639,10 +3612,6 @@ $('btn-logout').addEventListener('click', doLogout);
 // 別台電腦改過的資料同步回來後，重新讀取有用到的畫面
 window.api.sync.onApplied(async (keys) => {
   if (keys.includes('todos')) loadTodos();
-  if (keys.includes('project_stars')) {
-    await loadStarredProjects();
-    if (!$('project-panel').classList.contains('hidden')) runProjectSearch();
-  }
   if (keys.includes('timers')) {
     const timers = await call(window.api.timer.getAll());
     if (timers) {
@@ -3657,6 +3626,7 @@ $('btn-install-back').addEventListener('click', closeInstallPanel);
 $('btn-install-detail-close').addEventListener('click', closeInstallDetail);
 $('btn-install-tickets-more').addEventListener('click', loadMoreInstallTickets);
 $('btn-open-project-search').addEventListener('click', () => openProjectPanel());
+$('btn-open-project-progress').addEventListener('click', () => call(window.api.window.openProgress()));
 $('btn-project-back').addEventListener('click', closeProjectPanel);
 $('btn-project-tickets-close').addEventListener('click', closeProjectTickets);
 $('project-tickets-status-bar').addEventListener('click', (e) => {

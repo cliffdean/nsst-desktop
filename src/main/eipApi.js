@@ -28,12 +28,33 @@ async function listEngineers() {
 
 // 專案清單(含流程進度各階段的狀態、工程部/財務部卡片、四期收款)；status是逗號分隔的專案狀態代碼，不帶=全部
 // status含1(進行中)時後端也會帶出已完成但仍有未完成工單的專案；dept: engineering(含退回工程部)|finance，不帶=全部
-async function listProjects(q, status, dept) {
+async function listProjects(q, status, dept, starredOnly) {
   const params = {};
   if (q) params.q = q;
   if (status) params.status = status;
   if (dept) params.dept = dept;
+  if (starredOnly) params.starred = 1; // 只回加星專案(全站共用，網頁端與桌面工具同一份)
   const res = await client().get('/projects', { params });
+  return res.data.data;
+}
+
+// 專案進度(專案→追加專案→未完成工單的階層，甘特圖用)：params為 { project_ids[], starred, status[], user_ids[], from, to }
+// 回傳 { today, projects: [...], options: { projects, statuses, users } }
+async function getProjectProgress(params) {
+  const res = await client().get('/project-progress', { params });
+  return res.data.data;
+}
+
+// 加星關注的專案id(整數陣列)：全站共用，網頁端跟桌面工具看到的是同一批
+async function listProjectStars() {
+  const res = await client().get('/project-stars');
+  return res.data.data;
+}
+
+// 切換加星，回傳切換後的{ id, starred }；帶starred(true/false)就是指定狀態，不是切換
+async function toggleProjectStar(projectId, starred) {
+  const body = starred === undefined ? {} : { starred };
+  const res = await client().post(`/projects/${projectId}/star`, body);
   return res.data.data;
 }
 
@@ -209,6 +230,9 @@ module.exports = {
   whoami,
   listEngineers,
   listProjects,
+  getProjectProgress,
+  listProjectStars,
+  toggleProjectStar,
   projectDeptTransfer,
   projectPaymentUpdate,
   projectPaymentPercentSave,

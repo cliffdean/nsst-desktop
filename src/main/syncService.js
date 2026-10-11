@@ -1,7 +1,7 @@
-// 個人資料同步：待辦、計時、工單類型標記、加星專案、回覆範本存到EIP後端(跟著帳號走，多台電腦共用)
+// 個人資料同步：待辦、計時、工單類型標記、回覆範本存到EIP後端(跟著帳號走，多台電腦共用)
 // 本機的electron-store仍是快取，離線照常讀寫；有變動就延遲推上去，啟動/登入後/定時再從後端拉回來
 // 每種資料整包覆蓋，後寫的贏；每台電腦不同的設定(專案Git路徑、快捷鍵、EIP網址)不同步
-const { settingsStore, timersStore, ticketMetaStore, todoStore, projectStarStore } = require('./store');
+const { settingsStore, timersStore, ticketMetaStore, todoStore } = require('./store');
 const eipApi = require('./eipApi');
 
 const PUSH_DELAY_MS = 1000;
@@ -11,7 +11,6 @@ const storeEntries = {
   todos: todoStore,
   timers: timersStore,
   ticket_meta: ticketMetaStore,
-  project_stars: projectStarStore,
 };
 
 const DEFAULT_REPLY_TEMPLATES = { bug: '', feature: '', optimize: '', inquiry: '', other: '' };
@@ -90,7 +89,7 @@ function mergeFirstSync(key, remote, local) {
     Object.entries(remoteObj).forEach(([k, v]) => { if (v) merged[k] = v; });
     return merged;
   }
-  return { ...remoteObj, ...localObj }; // 計時/類型標記/加星：以ticket/專案id為key，聯集即可
+  return { ...remoteObj, ...localObj }; // 計時/類型標記：以ticket/專案id為key，聯集即可
 }
 
 // 有本機改動還沒推上去的先推；後端有的覆蓋本機，後端沒有而本機有資料的把本機推上去
