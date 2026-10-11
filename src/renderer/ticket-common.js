@@ -1,7 +1,8 @@
 // 主視窗(renderer.js)與獨立工單詳情視窗(ticket-window.js)共用的工具函式與工單排版，要在各自的script之前載入
 
 function escapeHtml(text) {
-  return String(text || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // 不能用 text || ''：數字0(例如狀態碼0=新任務)會被當成空值變成空字串
+  return String(text == null ? '' : text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // 備註這種自由文字欄位常常有換行，先跳脫HTML特殊字元再把換行轉成<br>，不然會全部擠成一行看不出段落

@@ -467,6 +467,8 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
   cursor: pointer;
 }
 .tab-btn.active { background: #2f6fd8; color: #fff; border-color: #2f6fd8; }
+.tab-btn-right { margin-left: auto; }
+.btn-history-more { display: block; width: 100%; margin: 8px 0; padding: 8px; cursor: pointer; }
 .tab-count { margin-left: 4px; opacity: 0.8; }
 
 .search-box {
@@ -548,6 +550,14 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
   font-size: 12px; cursor: pointer; user-select: none; background: #fff;
 }
 .adv-check-item input { margin: 0; }
+.adv-preset-btn {
+  align-self: stretch; display: inline-flex; align-items: center; justify-content: center;
+  padding: 3px 12px; margin-right: 6px; box-sizing: border-box;
+  border: 1px solid #cfd4dc; border-radius: 12px; background: #fff; color: #333;
+  font-size: 12px; font-weight: normal; cursor: pointer; user-select: none;
+}
+.adv-preset-btn:hover { border-color: #2f6fd8; color: #2f6fd8; }
+.adv-preset-btn.active { background: #eaf1ff; border-color: #2f6fd8; color: #2f6fd8; }
 .adv-check-item.checked { background: #eaf1ff; border-color: #2f6fd8; color: #2f6fd8; }
 
 .ts-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0; font-size: 12px; color: #667; }

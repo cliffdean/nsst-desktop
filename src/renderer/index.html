@@ -290,6 +290,7 @@
           <div id="ticket-tabs" class="ticket-tabs">
             <button class="tab-btn active" data-tab="normal">待處理<span class="tab-count" id="tab-count-normal"></span></button>
             <button class="tab-btn" data-tab="qc">品保中<span class="tab-count" id="tab-count-qc"></span></button>
+            <button class="tab-btn tab-btn-right" data-tab="history" title="之前已完成(成功/已關閉)的工單歷史記錄">歷史記錄</button>
           </div>
           <div class="ticket-search-row">
             <input type="text" id="ticket-search" placeholder="搜尋工單編號／摘要／專案名稱..." class="search-box" />
@@ -674,6 +675,7 @@
 
             <div class="adv-row adv-row-wrap">
               <label>狀態</label>
+              <button type="button" id="btn-adv-status-pending" class="adv-preset-btn" title="一次勾選：新任務、已指派、已暫停、未定義、追蹤中；再點一次取消">待處理</button>
               <div id="adv-statuses" class="adv-checkbox-group"></div>
             </div>
 

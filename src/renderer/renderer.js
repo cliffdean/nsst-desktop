@@ -13,7 +13,8 @@ const state = {
   searchQuery: '',
   ticketRange: 'week', // 左側清單的時間範圍：'week'=本週五以前(後端預設)，'next'=下週五以前(週六日派單時用)，'all'=全部未結案(不限開始日期)
   projectView: null, // 專案工單檢視模式：{ project, filters, label }；左側清單暫時改列某專案的工單(給專管分配用)
-  activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單
+  activeTab: 'normal', // 'normal'=待處理(assigned等) / 'qc'=品保中，分開避免QC單淹沒真正要處理的工單 / 'history'=已完成(成功/已關閉)的歷史記錄
+  history: { userId: null, q: '', items: [], page: 0, total: 0, loading: false, loaded: false, seq: 0 }, // 歷史記錄分頁：不跟待辦清單混在一起，單獨分頁讀取
   viewUserId: null, // 左側清單目前在看哪位工程師的工單；null=自己(每次開App都從自己開始，不記憶)
   engineers: [],
   pendingFileNames: [], // 對應pendingFileIds的檔名，顯示用
@@ -1441,6 +1442,29 @@ function renderAdvCheckboxGroup(containerId, items, checkedValues) {
   });
 }
 
+// 狀態「待處理」快捷：剛好勾選 新任務、已指派、已暫停、未定義、追蹤中(0,1,3,6,7)；已經是這組時再點一次就全部取消
+function isAdvPendingPresetActive() {
+  const preset = PENDING_STATUS_PRESET.map(String);
+  const current = Array.from($('adv-statuses').querySelectorAll('input:checked')).map((el) => el.value);
+  return current.length === preset.length && preset.every((v) => current.includes(v));
+}
+
+function syncAdvPendingPresetUi() {
+  $('btn-adv-status-pending').classList.toggle('active', isAdvPendingPresetActive());
+}
+
+function toggleAdvPendingPreset() {
+  const inputs = Array.from($('adv-statuses').querySelectorAll('input'));
+  if (!inputs.length) return; // 選項還沒載入
+  const preset = PENDING_STATUS_PRESET.map(String);
+  const turnOff = isAdvPendingPresetActive();
+  inputs.forEach((el) => {
+    el.checked = !turnOff && preset.includes(el.value);
+    el.closest('.adv-check-item').classList.toggle('checked', el.checked);
+  });
+  syncAdvPendingPresetUi();
+}
+
 function getCheckedValues(containerId) {
   return Array.from($(containerId).querySelectorAll('input:checked')).map((el) => el.value);
 }
@@ -1542,6 +1566,7 @@ function resetAdvSearchState(closeForm) {
   if (state.advSearch.optionsLoaded) {
     renderAdvCheckboxGroup('adv-fields', getFieldCheckboxItems(), state.advSearch.fields);
     renderAdvCheckboxGroup('adv-statuses', getStatusCheckboxItemsFromDom(), []);
+    syncAdvPendingPresetUi();
     renderAdvCheckboxGroup('adv-categories', getCategoryCheckboxItemsFromDom(), []);
   }
   if (closeForm) closeAdvFormPanel();
@@ -1589,7 +1614,7 @@ function renderAdvChips() {
   }
   const statusTexts = getCheckedTexts('adv-statuses');
   if (statusTexts.length) {
-    chips.push({ label: `狀態：${statusTexts.join('、')}`, onClear: () => { uncheckAll('adv-statuses'); clearOneAdvFilterAndRerun(); } });
+    chips.push({ label: `狀態：${statusTexts.join('、')}`, onClear: () => { uncheckAll('adv-statuses'); syncAdvPendingPresetUi(); clearOneAdvFilterAndRerun(); } });
   }
   const categoryTexts = getCheckedTexts('adv-categories');
   if (categoryTexts.length) {
@@ -2224,12 +2249,102 @@ function switchTab(tab) {
   state.selectedIds.clear();
   document.querySelectorAll('.tab-btn').forEach((el) => el.classList.toggle('active', el.dataset.tab === tab));
   updateBatchBar();
+  updateRangeUi();
   renderTicketList();
+}
+
+// ---------------- 歷史記錄分頁(已完成：成功4/已關閉8) ----------------
+
+function historyAssigneeId() {
+  return state.viewUserId || state.currentUserId;
+}
+
+// reset=true：重新從第一頁讀(切換分頁/工程師/搜尋字時)；否則接著讀下一頁
+async function loadHistory(reset) {
+  const h = state.history;
+  const userId = historyAssigneeId();
+  if (!userId) return;
+  const q = state.searchQuery.trim();
+  if (reset) {
+    Object.assign(h, { userId, q, items: [], page: 0, total: 0, loaded: false });
+  } else if (h.loading) {
+    return;
+  }
+  const seq = ++h.seq;
+  h.loading = true;
+  renderHistoryList();
+  const filters = { assignee_id: userId, status: '4,8', per_page: 30, page: h.page + 1, order_by: 'updated_at', order_dir: 'desc' };
+  if (h.q) filters.keyword = h.q;
+  const res = await call(window.api.eip.advancedSearchTickets(filters), (err) => {
+    if (seq === h.seq) $('ticket-list').innerHTML = `<p style="color:#d84f4f;">讀取歷史記錄失敗：${escapeHtml(err)}</p>`;
+  });
+  if (seq !== h.seq) return; // 已經切換條件，這批結果丟掉
+  h.loading = false;
+  if (!res) return;
+  h.items = h.items.concat(res.items || []);
+  h.page += 1;
+  h.total = res.meta ? Number(res.meta.total) : h.items.length;
+  h.loaded = true;
+  renderHistoryList();
+}
+
+function renderHistoryList() {
+  const h = state.history;
+  const container = $('ticket-list');
+  $('ticket-shown-count').textContent = h.loaded ? `${h.items.length}/${h.total} 張` : '';
+  if (!h.loaded) {
+    if (h.loading) container.innerHTML = '<p style="color:#888;">讀取中...</p>';
+    return;
+  }
+  if (!h.items.length) {
+    container.innerHTML = `<p>${h.q ? '沒有符合搜尋的歷史工單' : '目前沒有已完成的歷史工單'}。</p>`;
+    return;
+  }
+  const cards = h.items.map((t) => `
+      <div class="ticket-card ticket-history" data-id="${t.id}">
+        <div class="row1"><span>#${t.id} ${escapeHtml(t.project_name || t.name || '')}</span>${statusBadge(t)}</div>
+        <div class="summary">${escapeHtml(t.summary || '')}</div>
+        <div class="meta">${t.created_at ? `建單：${escapeHtml(String(t.created_at).slice(0, 10))}　` : ''}${t.updated_at ? `最後更新：${escapeHtml(String(t.updated_at).slice(0, 16))}　` : ''}${t.version_text ? `版本：${escapeHtml(t.version_text)}` : ''}</div>
+        <div class="card-actions-row">
+          <button class="btn-card-view-full" data-id="${t.id}" title="在右側打開這張工單的完整詳情">查看工單</button>
+          <button class="btn-card-copy-id" data-id="${t.id}" title="複製工單號到剪貼簿">複製單號</button>
+        </div>
+      </div>`).join('');
+  const more = h.items.length < h.total
+    ? `<button type="button" id="btn-history-more" class="btn-history-more" ${h.loading ? 'disabled' : ''}>${h.loading ? '讀取中...' : `載入更多(還有 ${h.total - h.items.length} 張)`}</button>`
+    : '';
+  container.innerHTML = cards + more;
+  container.querySelectorAll('.ticket-card').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button, input, label')) return;
+      openTicketDetail(el.dataset.id);
+    });
+  });
+  container.querySelectorAll('.btn-card-view-full').forEach((el) => el.addEventListener('click', () => viewTicketFullInSidebar(el.dataset.id)));
+  container.querySelectorAll('.btn-card-copy-id').forEach((el) => el.addEventListener('click', () => copyWithFeedback(el, el.dataset.id)));
+  const moreBtn = $('btn-history-more');
+  if (moreBtn) moreBtn.addEventListener('click', () => loadHistory(false));
+}
+
+// 歷史記錄分頁顯示中，或換了工程師/搜尋字後，是否需要重讀
+function ensureHistoryLoaded() {
+  const h = state.history;
+  const sameQuery = h.userId === historyAssigneeId() && h.q === state.searchQuery.trim();
+  if (h.loading && sameQuery) return;
+  if (!h.loaded || !sameQuery) {
+    loadHistory(true);
+  } else {
+    renderHistoryList();
+  }
 }
 
 function renderTicketList() {
   const container = $('ticket-list');
   if (!state.projectView) updateTabCounts();
+  if (state.activeTab === 'history' && !state.projectView) {
+    ensureHistoryLoaded();
+    return;
+  }
   const tickets = filteredTickets();
   // 搜尋框旁顯示實際列出的張數
   $('ticket-shown-count').textContent = `${tickets.length} 張`;
@@ -2828,7 +2943,7 @@ function nextFridayDateStr() {
 function updateRangeUi() {
   document.querySelectorAll('#ticket-range .range-btn').forEach((el) => el.classList.toggle('active', el.dataset.range === state.ticketRange));
   $('ticket-range-date').textContent = state.ticketRange === 'next' ? `(開始時間 ≤ ${nextFridayDateStr()})` : state.ticketRange === 'all' ? '(不限開始日期)' : '';
-  $('ticket-range').classList.toggle('hidden', !!state.projectView);
+  $('ticket-range').classList.toggle('hidden', !!state.projectView || state.activeTab === 'history');
 }
 
 function switchTicketRange(range) {
@@ -3692,6 +3807,8 @@ $('btn-toggle-add-event').addEventListener('click', () => {
 $('btn-cancel-event').addEventListener('click', cancelEventForm);
 $('btn-delete-event').addEventListener('click', deleteCurrentEvent);
 $('btn-submit-new-event').addEventListener('click', submitNewEvent);
+$('btn-adv-status-pending').addEventListener('click', toggleAdvPendingPreset);
+$('adv-statuses').addEventListener('change', syncAdvPendingPresetUi);
 $('btn-back').addEventListener('click', backToList);
 $('btn-copy-id').addEventListener('click', (e) => copyWithFeedback(e.currentTarget, state.currentTicket.id));
 $('btn-view-ticket-full').addEventListener('click', viewCurrentTicketFull);
@@ -3713,8 +3830,15 @@ document
 $('btn-load-commits').addEventListener('click', loadCommitsList);
 $('git-commits-filter').addEventListener('input', (e) => filterCommitList($('git-commits-list'), e.target.value));
 $('btn-do-git-commit').addEventListener('click', confirmGitCommit);
+let historySearchTimer = null;
 $('ticket-search').addEventListener('input', () => {
   state.searchQuery = $('ticket-search').value;
+  // 歷史記錄是伺服器端搜尋，等輸入停頓再查，避免每個字都打一次API
+  if (state.activeTab === 'history' && !state.projectView) {
+    clearTimeout(historySearchTimer);
+    historySearchTimer = setTimeout(renderTicketList, 400);
+    return;
+  }
   renderTicketList();
 });
 $('engineer-select').addEventListener('change', switchEngineer);
