@@ -18,7 +18,9 @@
     .field input[type=date] { height: 32px; border: 1px solid #d5dbe1; border-radius: 4px; padding: 0 6px; background: #fff; }
     .multi { position: relative; min-width: 200px; max-width: 340px; flex: 0 1 240px; }
     .multi.projects { min-width: 340px; max-width: 560px; flex: 1 1 380px; }
-    .chips { min-height: 34px; border: 1px solid #d5dbe1; border-radius: 4px; padding: 3px 26px 3px 4px; display: flex; flex-wrap: wrap; gap: 4px; cursor: pointer; background: #fff; position: relative; }
+    .chips { height: 34px; box-sizing: border-box; border: 1px solid #d5dbe1; border-radius: 4px; padding: 3px 26px 3px 4px; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; cursor: pointer; background: #fff; position: relative; overflow: hidden; }
+    .chip.more { border-color: #d5dbe1; background: #f4f7fb; color: #555; }
+    .chip.name { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
     .chips:after { content: "▾"; position: absolute; right: 9px; top: 7px; color: #666; }
     .placeholder { color: #999; padding: 4px 6px; }
     .chip { border: 1px solid #3b82f6; background: #eef5ff; color: #1d4ed8; border-radius: 3px; padding: 1px 6px; line-height: 20px; white-space: nowrap; }
@@ -29,7 +31,7 @@
     .drop label { display: flex; gap: 8px; align-items: center; padding: 5px 10px; cursor: pointer; }
     .drop label:hover { background: #f4f7fb; }
     .drop .hint { padding: 5px 10px; color: #888; font-size: 12px; border-bottom: 1px solid #f0f2f4; }
-    .starred-only { display: flex; align-items: center; gap: 6px; height: 32px; font-weight: 600; cursor: pointer; }
+    .starred-only { display: flex; align-items: center; gap: 6px; height: 32px; font-weight: 600; cursor: pointer; white-space: nowrap; }
     .starred-only .st { color: #f5b301; }
     .zoom { display: flex; border: 1px solid #d5dbe1; border-radius: 4px; overflow: hidden; background: #fff; margin-left: auto; }
     .zoom button { border: 0; background: #fff; padding: 0 14px; height: 30px; border-right: 1px solid #e7ecf1; }
@@ -48,6 +50,7 @@
     .c.name { width: 300px; }
     .c.type { width: 70px; justify-content: center; }
     .c.kind { width: 100px; justify-content: center; }
+    .c.pstage { width: 110px; justify-content: center; }
     .c.stage { width: 84px; justify-content: center; }
     .c.sev { width: 70px; justify-content: center; }
     .c.date { width: 62px; justify-content: center; }
@@ -84,7 +87,7 @@
 
   <div class="filter">
     <div class="field multi projects" id="projects-box">
-      <label>專案名稱 (可複選，最多20個)</label>
+      <label>專案名稱 (可複選，最多50個)</label>
       <div class="chips" id="projects-chips"></div>
       <div class="drop" id="projects-drop">
         <input type="text" id="projects-search" placeholder="搜尋專案名稱或編號" />
@@ -92,7 +95,7 @@
         <div id="projects-options"></div>
       </div>
     </div>
-    <label class="starred-only"><input type="checkbox" id="starred" checked /> <span class="st">★</span> 僅顯示有星號的案件</label>
+    <button id="btn-pick-starred" class="btn starred-only" type="button" title="將專案選擇改為所有加星的案件"><span class="st">★</span> 選取加星案件</button>
     <div class="field multi" id="status-box">
       <label>工單狀態 (可複選)</label>
       <div class="chips"></div>

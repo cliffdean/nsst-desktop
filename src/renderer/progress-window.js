@@ -7,15 +7,16 @@ const PROJECT_COLORS = ['#3b82f6', '#06b6d4', '#22a559', '#8b5cf6', '#f59e0b', '
 const STATUS_COLOR = { 0: '#8c959f', 1: '#2f80ed', 2: '#22a559', 3: '#0ea5a5', 4: '#22a559', 5: '#8b5cf6', 6: '#8c959f', 7: '#f59e0b', 8: '#6b7280', 10: '#7c4dff' };
 const OVERDUE_COLOR = '#f26d6d';
 const SEV_COLOR = ['#e5484d', '#f59e0b', '#22a559'];
-const MAX_PROJECTS = 20;
+const MAX_PROJECTS = 50;
 const DEFAULT_STATUS = [0, 1, 3, 6, 7]; // 新任務、已指派、已暫停、未定義、追蹤中
-const LEFT_W = 300 + 70 + 100 + 84 + 70 + 62 + 62 + 84;
+const LEFT_W = 300 + 70 + 100 + 110 + 84 + 70 + 62 + 62 + 84;
 
 let zoom = 'week';
 let loaded = null;
 let collapsed = {};
 let options = { projects: [], statuses: [], users: [] };
 let selectedProjects = [];
+let initialStarred = true;
 let statusBox = null;
 let userBox = null;
 
@@ -43,9 +44,17 @@ async function call(promise, onError) {
 
 function defaultRange() {
   const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), 1);
-  const to = new Date(now.getFullYear(), now.getMonth() + 3, 1);
+  const from = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
   return { from: fmt(from), to: fmt(to) };
+}
+
+// 篩選欄只顯示前幾個標籤，其餘收成「+N」，完整清單在下拉中勾選增減
+const CHIP_SHOW = 2;
+function chipsHtml(items) {
+  const shown = items.slice(0, CHIP_SHOW).map((o) => `<span class="chip name" title="${esc(o.name)}">${esc(o.name)}<i data-id="${o.id}">×</i></span>`).join('');
+  const rest = items.length - CHIP_SHOW;
+  return shown + (rest > 0 ? `<span class="chip more">+${rest}</span>` : '');
 }
 
 // ----- 通用複選(標籤 + 下拉勾選) -----
@@ -58,7 +67,7 @@ function createMulti(boxId, opts, initial, emptyText) {
   let items = opts;
   const nameOf = (id) => { const o = items.find((x) => x.id === id); return o ? o.name : ''; };
   function drawChips() {
-    chips.innerHTML = sel.map((id) => `<span class="chip">${esc(nameOf(id))}<i data-id="${id}">×</i></span>`).join('')
+    chips.innerHTML = chipsHtml(sel.map((id) => ({ id, name: nameOf(id) })))
       || `<span class="placeholder">${esc(emptyText)}</span>`;
   }
   function drawOptions() {
@@ -91,14 +100,13 @@ function createMulti(boxId, opts, initial, emptyText) {
   };
 }
 
-// ----- 專案多選(有搜尋、最多20個) -----
+// ----- 專案多選(有搜尋、最多50個) -----
 function drawProjectChips() {
-  const html = selectedProjects.map((id) => {
-    const p = options.projects.find((x) => x.id === id);
-    return p ? `<span class="chip">${esc(p.name)}<i data-id="${id}">×</i></span>` : '';
-  }).join('');
+  const html = chipsHtml(selectedProjects
+    .map((id) => options.projects.find((x) => x.id === id))
+    .filter(Boolean));
   $('projects-chips').innerHTML = html
-    || `<span class="placeholder">${$('starred').checked ? '全部加星專案(點此選擇)' : '全部進行中專案(點此選擇)'}</span>`;
+    || '<span class="placeholder">全部進行中專案(點此選擇)</span>';
 }
 function drawProjectOptions() {
   const kw = $('projects-search').value.trim().toLowerCase();
@@ -120,7 +128,7 @@ function filters() {
   const users = userBox.get();
   if (statuses.length) params.status = statuses;
   if (users.length) params.user_ids = users;
-  if ($('starred').checked) params.starred = 1;
+  if (initialStarred) params.starred = 1; // 開啟/重設時預設只看加星案件，之後改由專案選擇控制
   return params;
 }
 
@@ -138,8 +146,17 @@ async function query() {
     statusBox.setItems(options.statuses.map((s) => ({ id: s.code, name: s.text })));
     userBox.setItems([{ id: 0, name: '未指派' }].concat(options.users));
   }
+  if (initialStarred) {
+    initialStarred = false;
+    selectedProjects = starredIds();
+  }
   drawProjectChips();
   render();
+}
+
+// 目前加星的專案編號(受上限50個限制)
+function starredIds() {
+  return options.projects.filter((p) => p.starred).slice(0, MAX_PROJECTS).map((p) => p.id);
 }
 
 // ----- 繪製 -----
@@ -147,9 +164,7 @@ function render() {
   if (!loaded) return;
   if (!loaded.projects.length) {
     $('inner').style.width = '';
-    $('inner').innerHTML = `<div class="empty">${$('starred').checked && !selectedProjects.length
-      ? '還沒有符合條件的加星專案。到專案查詢點 ☆ 加星，或取消「僅顯示有星號的案件」查看全部。'
-      : '沒有符合條件的專案或工單'}</div>`;
+    $('inner').innerHTML = '<div class="empty">沒有符合條件的專案或工單</div>';
     return;
   }
   const range = defaultRange();
@@ -203,7 +218,7 @@ function render() {
     const closed = !!collapsed[key];
     const indent = depth * 22;
     rows += `<div class="row project"><div class="left" style="width:${LEFT_W}px">`
-      + `<div class="c name" style="width:${300 + 70 + 100 + 84 + 70}px;padding-left:${8 + indent}px">`
+      + `<div class="c name" style="width:${300 + 70 + 100 + 110 + 84 + 70}px;padding-left:${8 + indent}px">`
       + `<span class="toggle" data-key="${key}">${closed ? '▸' : '▾'}</span>`
       + `<span class="folder" style="color:${color}">▣</span>`
       + `<span title="${esc(p.name)}">${esc(p.name)}</span><span class="count">(${p.ticket_total})</span>`
@@ -220,6 +235,7 @@ function render() {
         + `<div class="c name" style="padding-left:${34 + indent + 22}px" title="${esc(title)}">`
         + `<a class="ticket-link" data-ticket="${t.id}">#${t.id} ${esc(t.summary)}</a></div>`
         + `<div class="c type">${esc(t.type_text)}</div><div class="c kind" title="${esc(t.kind_text)}">${esc(t.kind_text)}</div>`
+        + `<div class="c pstage" title="${esc(t.stage_text)}">${esc(t.stage_text)}</div>`
         + `<div class="c stage"><span class="tag" style="background:${STATUS_COLOR[t.status] || '#8c959f'}">${esc(t.status_text)}</span></div>`
         + `<div class="c sev"><span class="tag" style="background:${SEV_COLOR[t.severity] || '#8c959f'};min-width:36px">${esc(t.severity_text)}</span></div>`
         + `<div class="c date">${md(t.start)}</div><div class="c date ${t.overdue ? 'overdue' : ''}" title="${t.overdue ? '已逾期' : ''}">${md(t.end)}</div><div class="c user">${esc(t.user_name)}</div>`
@@ -231,7 +247,7 @@ function render() {
 
   const head = `<div class="row head"><div class="left" style="width:${LEFT_W}px">`
     + '<div class="c name">專案 / 工單</div><div class="c type">任務類型</div><div class="c kind">任務分類</div>'
-    + '<div class="c stage">任務階段</div><div class="c sev">緊急程度</div><div class="c date">起始日</div><div class="c date">結束日</div><div class="c user">負責人</div></div>'
+    + '<div class="c pstage">專案進度</div><div class="c stage">任務階段</div><div class="c sev">緊急程度</div><div class="c date">起始日</div><div class="c date">結束日</div><div class="c user">負責人</div></div>'
     + `<div class="time" style="width:${width}px"><div class="months">${months}</div><div class="ticks">${ticks}</div>`
     + (todayX >= 0 && todayX <= width ? `<span class="today-flag" style="left:${todayX}px">今天</span>` : '') + '</div></div>';
   const todayLine = todayX >= 0 && todayX <= width ? `<div class="today" style="left:${LEFT_W + todayX}px"></div>` : '';
@@ -260,8 +276,7 @@ $('inner').addEventListener('click', async (e) => {
     const mark = (list) => list.forEach((p) => { if (p.id === id) p.starred = starred; mark(p.children); });
     mark(loaded.projects);
     options.projects.forEach((p) => { if (p.id === id) p.starred = starred; });
-    if ($('starred').checked && !starred) query();
-    else render();
+    render();
   }
 });
 
@@ -299,12 +314,22 @@ $('zoom').addEventListener('click', (e) => {
 });
 $('btn-search').addEventListener('click', query);
 $('btn-reload').addEventListener('click', query);
-$('starred').addEventListener('change', () => { drawProjectChips(); query(); });
+$('btn-pick-starred').addEventListener('click', () => {
+  const ids = starredIds();
+  if (!ids.length) {
+    alert('目前沒有加星的專案。可在專案列的 ☆ 或專案查詢中加星。');
+    return;
+  }
+  selectedProjects = ids;
+  drawProjectChips();
+  drawProjectOptions();
+  query();
+});
 $('btn-reset').addEventListener('click', () => {
   const range = defaultRange();
   selectedProjects = [];
   collapsed = {};
-  $('starred').checked = true;
+  initialStarred = true;
   statusBox.set(DEFAULT_STATUS);
   userBox.set([]);
   $('date-from').value = range.from;
