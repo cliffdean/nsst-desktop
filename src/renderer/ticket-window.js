@@ -34,6 +34,10 @@ async function loadTicket() {
   $('tw-basic').innerHTML = ticketFullInfoRows(ticket);
   bindVersionEditor($('tw-basic'), ticket);
   bindTimeEditors($('tw-basic'), ticket);
+  bindFieldEditors($('tw-basic'), ticket, (data) => {
+    $('tw-title').textContent = data.summary || '(無摘要)';
+    document.title = `${formatTicketNo(ticket.id)} ${data.summary || ''}`;
+  });
   // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
   $('tw-desc').innerHTML = ticket.description || '(無說明)';
   $('tw-attachments').innerHTML = attachmentsHtml(ticket.attachments);
@@ -66,6 +70,7 @@ $('btn-tw-delete').addEventListener('click', () => {
   if (me) {
     currentUserId = me.id;
     versionPermission.canAdd = !!me.can_add_version;
+    ticketEditPermission.canEdit = !!me.can_edit_any_ticket;
     canTransferTicket = !!me.can_transfer_ticket;
     canEditAnyTicket = !!me.can_edit_any_ticket;
     canDeleteTicket = !!me.can_delete_ticket;

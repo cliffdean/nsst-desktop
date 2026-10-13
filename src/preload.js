@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('api', {
     transferTicket: invoke('eip:transfer-ticket'),
     updateTicketVersion: invoke('eip:update-ticket-version'),
     updateTicketTimes: invoke('eip:update-ticket-times'),
+    updateTicketFields: invoke('eip:update-ticket-fields'),
     deleteTicket: invoke('eip:delete-ticket'),
     addTicketVersion: invoke('eip:add-ticket-version'),
     uploadFile: invoke('eip:upload-file'),

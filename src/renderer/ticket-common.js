@@ -206,23 +206,34 @@ function ticketInfoRows(rows) {
     .join('');
 }
 
+// 工單詳情的欄位編輯(標題/日期/版本/分類...)只開放專管；各視窗whoami完後設定，後端fields接口也會再檢查一次
+const ticketEditPermission = { canEdit: false };
+
 // 系統功能版本：顯示文字+筆按鈕，點筆變成下拉選單，筆變成保存按鈕；綁定事件見bindVersionEditor
 function versionEditorHtml(ticket) {
   return `<span class="version-editor"><span class="version-value">${escapeHtml(ticket.version_text || '-')}</span>`
-    + '<button type="button" class="btn-version-edit" title="修改系統功能版本">✎</button>'
-    + '<button type="button" class="btn-version-cancel hidden" title="取消修改">✕</button></span>';
+    + (ticketEditPermission.canEdit
+      ? '<button type="button" class="btn-version-edit" title="修改系統功能版本">✎</button>'
+        + '<button type="button" class="btn-version-cancel hidden" title="取消修改">✕</button>'
+      : '')
+    + '</span>';
 }
 
-// 版本選項跟後端search-options同一份(parameter_settings的project_version)，同一個視窗只抓一次
-let versionOptionsPromise = null;
-function loadVersionOptions() {
-  if (!versionOptionsPromise) {
-    versionOptionsPromise = call(window.api.eip.getTicketSearchOptions()).then((opts) => {
-      if (!opts) versionOptionsPromise = null; // 失敗的話下次再重抓
-      return opts ? opts.versions || [] : null;
+// 下拉選項跟後端search-options同一份(parameter_settings)，同一個視窗只抓一次
+let ticketOptionsPromise = null;
+function loadTicketOptions() {
+  if (!ticketOptionsPromise) {
+    ticketOptionsPromise = call(window.api.eip.getTicketSearchOptions()).then((opts) => {
+      if (!opts) ticketOptionsPromise = null; // 失敗的話下次再重抓
+      return opts;
     });
   }
-  return versionOptionsPromise;
+  return ticketOptionsPromise;
+}
+
+async function loadVersionOptions() {
+  const opts = await loadTicketOptions();
+  return opts ? opts.versions || [] : null;
 }
 
 // 任務開始/結束日期：顯示文字+筆按鈕，點筆變成datetime-local輸入框，筆變成保存按鈕；綁定事件見bindTimeEditors
@@ -231,8 +242,11 @@ const TIME_FIELD_LABELS = { start_time: '任務開始日期', end_time: '任務�
 function timeEditorHtml(ticket, field) {
   const label = TIME_FIELD_LABELS[field];
   return `<span class="time-editor" data-field="${field}"><span class="time-value">${escapeHtml(validTime(ticket[field]) || '-')}</span>`
-    + `<button type="button" class="btn-time-edit" title="修改${label}">✎</button>`
-    + '<button type="button" class="btn-time-cancel hidden" title="取消修改">✕</button></span>';
+    + (ticketEditPermission.canEdit
+      ? `<button type="button" class="btn-time-edit" title="修改${label}">✎</button>`
+        + '<button type="button" class="btn-time-cancel hidden" title="取消修改">✕</button>'
+      : '')
+    + '</span>';
 }
 
 // ticket是目前顯示中的工單物件，存檔成功會直接更新它的start_time/end_time，onSaved給呼叫端同步其他畫面用
@@ -241,6 +255,7 @@ function bindTimeEditors(container, ticket, onSaved) {
     const field = box.dataset.field;
     const label = TIME_FIELD_LABELS[field];
     const btn = box.querySelector('.btn-time-edit');
+    if (!btn) return; // 不是專管，沒有編輯鈕
     const cancelBtn = box.querySelector('.btn-time-cancel');
     const valueEl = box.querySelector('.time-value');
     let input = null;
@@ -297,6 +312,7 @@ function bindVersionEditor(container, ticket, onSaved) {
   const box = container.querySelector('.version-editor');
   if (!box) return;
   const btn = box.querySelector('.btn-version-edit');
+  if (!btn) return; // 不是專管，沒有編輯鈕
   const cancelBtn = box.querySelector('.btn-version-cancel');
   const valueEl = box.querySelector('.version-value');
   let field = null; // 編輯中的元素：版本下拉選單，或選了「新增版本」後換成的文字輸入框
@@ -346,7 +362,7 @@ function bindVersionEditor(container, ticket, onSaved) {
 新增後無法從這裡刪除，只能到EIP參數設定處理。`)) return null;
     const data = await call(window.api.eip.addTicketVersion(name), (err) => alert('新增版本失敗：' + err));
     if (!data) return null;
-    versionOptionsPromise = Promise.resolve(data.versions);
+    ticketOptionsPromise = loadTicketOptions().then((opts) => (opts ? { ...opts, versions: data.versions } : opts));
     return data.value;
   };
 
@@ -388,6 +404,114 @@ function bindVersionEditor(container, ticket, onSaved) {
       btn.disabled = false;
       cancelBtn.disabled = false;
     }
+  });
+}
+
+// ---------------- 工單基本欄位編輯(標題/預計工時/嚴重程度/專案進度/類型/分類) ----------------
+// 顯示文字+筆按鈕，點筆變成輸入元件、筆變成保存按鈕；後端是POST /tickets/{id}/fields，不限負責人
+
+const FIELD_EDITORS = {
+  summary: { label: '標題', input: 'text', current: (t) => t.summary || '', text: (t) => t.summary },
+  estimate: { label: '預計工時(小時)', input: 'number', current: (t) => (Number(t.estimate) > 0 ? t.estimate : ''), text: (t) => (Number(t.estimate) > 0 ? `${t.estimate} 小時` : '') },
+  severity: { label: '嚴重程度', input: 'select', options: (o) => o.severities, current: (t) => t.severity, text: (t) => t.severity_text },
+  task_stage: { label: '專案進度', input: 'select', options: (o) => o.task_stages, current: (t) => t.task_stage, text: (t) => t.task_stage_text },
+  type: { label: '類型', input: 'select', options: (o, t) => (t.name === 'business' ? o.types.business : o.types.project), current: (t) => t.type, text: (t) => t.type_label },
+  kind: { label: '分類', input: 'multi', options: (o) => o.classifications, current: (t) => t.kind || [], text: (t) => t.classification },
+};
+
+function fieldEditorHtml(ticket, field) {
+  const cfg = FIELD_EDITORS[field];
+  return `<span class="field-editor" data-field="${field}"><span class="field-value">${escapeHtml(cfg.text(ticket) || '-')}</span>`
+    + (ticketEditPermission.canEdit
+      ? `<button type="button" class="btn-field-edit" title="修改${cfg.label}">✎</button>`
+        + '<button type="button" class="btn-field-cancel hidden" title="取消修改">✕</button>'
+      : '')
+    + '</span>';
+}
+
+// ticket是目前顯示中的工單物件，存檔成功會用後端回傳的最新欄位直接更新它，onSaved(data)給呼叫端同步其他畫面用
+function bindFieldEditors(container, ticket, onSaved) {
+  container.querySelectorAll('.field-editor').forEach((box) => {
+    const field = box.dataset.field;
+    const cfg = FIELD_EDITORS[field];
+    const btn = box.querySelector('.btn-field-edit');
+    if (!btn) return; // 不是專管，沒有編輯鈕
+    const cancelBtn = box.querySelector('.btn-field-cancel');
+    const valueEl = box.querySelector('.field-value');
+    let control = null;
+
+    const exitEdit = () => {
+      if (control) control.replaceWith(valueEl);
+      control = null;
+      btn.textContent = '✎';
+      btn.title = `修改${cfg.label}`;
+      cancelBtn.classList.add('hidden');
+    };
+    cancelBtn.addEventListener('click', exitEdit);
+
+    const buildControl = async () => {
+      if (cfg.input === 'text' || cfg.input === 'number') {
+        const input = document.createElement('input');
+        input.type = cfg.input;
+        if (cfg.input === 'number') { input.min = '0'; input.step = '0.5'; }
+        input.className = 'field-input';
+        input.value = cfg.current(ticket);
+        return input;
+      }
+      const opts = await loadTicketOptions();
+      if (!opts) return null;
+      const list = cfg.options(opts, ticket) || [];
+      const current = cfg.current(ticket);
+      if (cfg.input === 'multi') {
+        const wrap = document.createElement('span');
+        wrap.className = 'field-multi';
+        wrap.innerHTML = list.map((o) => `<label class="inline-check"><input type="checkbox" value="${o.value}" ${current.includes(o.value) ? 'checked' : ''} /> ${escapeHtml(o.text)}</label>`).join(' ');
+        return wrap;
+      }
+      const select = document.createElement('select');
+      select.className = 'field-input';
+      select.innerHTML = list.map((o) => `<option value="${o.value}" ${o.value === current ? 'selected' : ''}>${escapeHtml(o.text)}</option>`).join('');
+      if (!list.some((o) => o.value === current)) select.selectedIndex = -1; // 原本沒設定的先停在空白，避免沒注意就存成第一個選項
+      return select;
+    };
+
+    btn.addEventListener('click', async () => {
+      if (!control) {
+        btn.disabled = true;
+        control = await buildControl();
+        btn.disabled = false;
+        if (!control) return;
+        valueEl.replaceWith(control);
+        if (control.focus) control.focus();
+        btn.textContent = '💾';
+        btn.title = `保存${cfg.label}`;
+        cancelBtn.classList.remove('hidden');
+        return;
+      }
+
+      let value;
+      if (cfg.input === 'multi') {
+        value = [...control.querySelectorAll('input:checked')].map((el) => el.value);
+        if (!value.length) return alert('請至少勾選一個分類');
+      } else {
+        value = String(control.value).trim();
+        if (value === '') return alert(`請輸入或選擇${cfg.label}`);
+      }
+
+      btn.disabled = true;
+      cancelBtn.disabled = true;
+      try {
+        const data = await call(window.api.eip.updateTicketFields(ticket.id, { [field]: value }), (err) => alert(`修改${cfg.label}失敗：` + err));
+        if (!data) return;
+        Object.assign(ticket, data);
+        valueEl.textContent = cfg.text(ticket) || '-';
+        exitEdit();
+        if (onSaved) onSaved(data);
+      } finally {
+        btn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    });
   });
 }
 
@@ -531,6 +655,100 @@ function bindTransferTicketModal() {
   });
 }
 
+// ---------------- 批量修改工單欄位(日期/任務分類/緊急程度/專案進度/版本/任務類型) ----------------
+// 每個欄位預設「不修改」，只有勾選或選了值的才會送出；對話框用JS動態建立，後端沒有批次API所以一張一張送
+
+// tickets：工單物件陣列；onDone(成功的id陣列)：給呼叫端重新整理畫面用
+async function openBatchEditDialog(tickets, onDone) {
+  let pending = tickets.slice();
+  const hasBusiness = pending.some((t) => t.name === 'business');
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `<div class="modal-box">
+      <div class="modal-header">
+        <h2>批量修改工單（${pending.length} 張）</h2>
+        <button type="button" data-act="close">✕</button>
+      </div>
+      <p class="meta">只會修改有填寫/選擇的欄位，保持「不修改」的欄位各張維持原值。</p>
+      <label>任務開始日期 <input type="datetime-local" data-role="start_time" /></label>
+      <label>任務結束日期 <input type="datetime-local" data-role="end_time" /></label>
+      <label>緊急程度 <select data-role="severity"><option value="">不修改</option></select></label>
+      <label>專案進度 <select data-role="task_stage"><option value="">不修改</option></select></label>
+      <label>任務類型${hasBusiness ? '(所選含業務單，類型清單不同，無法批量修改)' : ''} <select data-role="type"${hasBusiness ? ' disabled' : ''}><option value="">不修改</option></select></label>
+      <label>系統功能版本 <select data-role="version"><option value="">不修改</option></select></label>
+      <fieldset class="batch-edit-kind"><legend>任務分類(勾選=改成所勾選的分類，覆蓋原有分類；都不勾=不修改)</legend>
+        <div data-role="kind">讀取選項中...</div>
+      </fieldset>
+      <div class="actions">
+        <button type="button" data-act="submit">確認修改</button>
+        <button type="button" data-act="close">取消</button>
+      </div>
+      <p class="meta" data-role="message" style="white-space:pre-line;"></p>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  const role = (name) => backdrop.querySelector(`[data-role="${name}"]`);
+  const message = role('message');
+  const submitBtn = backdrop.querySelector('[data-act="submit"]');
+  const fill = (name, list) => {
+    role(name).insertAdjacentHTML('beforeend', (list || []).map((o) => `<option value="${o.value}">${escapeHtml(o.text)}</option>`).join(''));
+  };
+
+  const opts = await call(window.api.eip.getTicketSearchOptions(), (err) => { message.textContent = '讀取選項失敗：' + err; });
+  if (opts) {
+    fill('severity', opts.severities);
+    fill('task_stage', opts.task_stages);
+    fill('type', opts.types && opts.types.project);
+    fill('version', opts.versions);
+    role('kind').innerHTML = (opts.classifications || []).length
+      ? opts.classifications.map((o) => `<label class="inline-check"><input type="checkbox" value="${o.value}" /> ${escapeHtml(o.text)}</label>`).join(' ')
+      : '(沒有可選的任務分類)';
+  } else {
+    role('kind').textContent = '';
+    submitBtn.disabled = true;
+  }
+
+  backdrop.addEventListener('click', async (e) => {
+    if (e.target === backdrop || e.target.closest('[data-act="close"]')) {
+      close();
+      return;
+    }
+    if (!e.target.closest('[data-act="submit"]') || submitBtn.disabled) return;
+
+    const fields = {};
+    ['start_time', 'end_time', 'severity', 'task_stage', 'type', 'version'].forEach((name) => {
+      const v = role(name).value;
+      if (v !== '') fields[name] = v;
+    });
+    const kinds = [...backdrop.querySelectorAll('[data-role="kind"] input:checked')].map((el) => el.value);
+    if (kinds.length) fields.kind = kinds;
+    if (!Object.keys(fields).length) {
+      message.textContent = '請至少修改一個欄位';
+      return;
+    }
+    if (fields.start_time && fields.end_time && fields.start_time > fields.end_time) {
+      message.textContent = '開始日期不能晚於結束日期';
+      return;
+    }
+    if (!confirm(`確定要把 ${pending.length} 張工單的所選欄位一起修改嗎？`)) return;
+
+    submitBtn.disabled = true;
+    message.textContent = '處理中...';
+    const total = pending.length;
+    const { done, failed } = await runForEachTicket(pending.map((t) => t.id), (id) => window.api.eip.updateTicketFields(id, fields));
+    submitBtn.disabled = false;
+    if (done.length && onDone) onDone(done);
+    if (failed.length) {
+      // 失敗的留著讓使用者看原因，改完可以再按一次只重送失敗的
+      const failedIds = new Set(failed.map((f) => String(f.id)));
+      pending = pending.filter((t) => failedIds.has(String(t.id)));
+      message.textContent = `成功 ${done.length} 張，失敗 ${failed.length} 張(共 ${total} 張)：\n${batchFailedText(failed)}`;
+      return;
+    }
+    close();
+  });
+}
+
 // ---------------- 刪除工單(僅限「專管」，後端只把狀態改成已刪除，並寫一則回覆記錄刪除原因) ----------------
 // 主視窗與獨立工單視窗共用；對話框用JS動態建立，兩邊的HTML都不用另外放元素
 
@@ -637,23 +855,24 @@ function bindReplyToggles(container) {
 
 // 工單完整資訊欄位：順序與名稱對齊EIP總表；所有代碼(狀態/類型/人員ID等)都已由後端轉成文字，這裡不顯示任何裸ID
 function ticketFullInfoRows(ticket) {
-  const estimate = Number(ticket.estimate) > 0 ? `${ticket.estimate} 小時` : '';
   return ticketInfoRows([
     ['單號', formatTicketNo(ticket.id)],
     ['狀態', ticket.is_qc_stage ? `${ticket.status_text}（已轉品保）` : ticket.status_text],
+    ['標題', { html: fieldEditorHtml(ticket, 'summary') }],
     ['進度', ticket.progress_text],
     ['任務類型', ticket.kind_name],
     ['專案名稱', ticket.project_name],
-    ['類型', ticket.type_label],
-    ['分類', ticket.classification],
-    ['嚴重程度', ticket.severity_text],
+    ['專案進度', { html: fieldEditorHtml(ticket, 'task_stage') }],
+    ['類型', { html: fieldEditorHtml(ticket, 'type') }],
+    ['分類', { html: fieldEditorHtml(ticket, 'kind') }],
+    ['嚴重程度', { html: fieldEditorHtml(ticket, 'severity') }],
     ['負責人員', ticket.p_user_name],
     ['反應人', ticket.c_user_name],
     ['客戶名稱', ticket.customer_name],
     ['經銷商', ticket.dealer_name],
     ['系統功能版本', { html: versionEditorHtml(ticket) }],
     ['負責業務', ticket.sales_name],
-    ['預計工時', estimate],
+    ['預計工時', { html: fieldEditorHtml(ticket, 'estimate') }],
     ['創建日期', validTime(ticket.created_at)],
     ['任務開始日期', { html: timeEditorHtml(ticket, 'start_time') }],
     ['任務結束日期', { html: timeEditorHtml(ticket, 'end_time') }],

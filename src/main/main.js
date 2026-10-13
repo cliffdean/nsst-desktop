@@ -542,7 +542,13 @@ handle('eip:transfer-ticket', async (id, info, chgUserId, endTime, startTime) =>
 });
 handle('eip:update-ticket-times', (id, times) => eipApi.updateTicketTimes(id, times));
 handle('eip:update-ticket-version', (id, version) => eipApi.updateTicketVersion(id, version));
-handle('eip:delete-ticket', (id, reason) => eipApi.deleteTicket(id, reason));
+handle('eip:update-ticket-fields', async (id, fields) => {
+  const result = await eipApi.updateTicketFields(id, fields);
+  // 獨立工單視窗改了欄位，通知主視窗重整左側清單(主視窗自己改的也會重整，多一次無妨)
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ticket:changed', id);
+  return result;
+});
+handle('eip:delete-ticket',(id, reason) => eipApi.deleteTicket(id, reason));
 handle('eip:add-ticket-version', (name) => eipApi.addTicketVersion(name));
 handle('eip:upload-file', (filePath) => eipApi.uploadFile(filePath));
 handle('eip:upload-data', (data, filename) => eipApi.uploadBuffer(Buffer.from(data), filename));

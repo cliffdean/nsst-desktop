@@ -876,3 +876,11 @@ button.busy { opacity: .7; cursor: progress; }
 .ticket-range .range-btn { padding: 2px 10px; font-size: 12px; border: 1px solid #b9c4d6; background: #fff; color: #456; border-radius: 12px; cursor: pointer; }
 .ticket-range .range-btn.active { background: #2f6fd8; border-color: #2f6fd8; color: #fff; font-weight: 600; }
 .ticket-range .meta { margin-left: 4px; font-size: 11px; }
+
+/* 批量修改工單對話框：任務分類的勾選項橫向排列 */
+.batch-edit-kind .inline-check { display: inline-block; margin: 2px 12px 2px 0; font-weight: normal; }
+
+/* 工單詳情的基本欄位編輯器 */
+.field-input { max-width: 100%; }
+.field-multi .inline-check { display: inline-block; margin: 2px 10px 2px 0; }
+.btn-field-edit, .btn-field-cancel { margin-left: 6px; padding: 0 6px; }

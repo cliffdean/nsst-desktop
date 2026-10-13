@@ -1315,6 +1315,14 @@ function syncTicketTimes(ticketId, data) {
   renderTicketList();
 }
 
+// 右側詳情改了基本欄位後，左側清單裡同一張單(含放到左側的專案工單)跟著更新，下拉選單/清單卡片不用等重新整理
+function syncTicketFields(ticketId, data) {
+  const t = state.tickets.find((x) => String(x.id) === String(ticketId));
+  if (!t) return;
+  Object.assign(t, data);
+  renderTicketList();
+}
+
 function syncTicketVersion(ticketId, data) {
   const t = state.tickets.find((x) => String(x.id) === String(ticketId));
   if (!t) return;
@@ -1830,6 +1838,7 @@ async function openTicketSearchDetail(id, syncList = false) {
   $('ticket-search-detail-basic').innerHTML = ticketFullInfoRows(ticket);
   bindVersionEditor($('ticket-search-detail-basic'), ticket, (data) => syncTicketVersion(ticket.id, data));
   bindTimeEditors($('ticket-search-detail-basic'), ticket, (data) => syncTicketTimes(ticket.id, data));
+  bindFieldEditors($('ticket-search-detail-basic'), ticket, (data) => syncTicketFields(ticket.id, data));
 
   // 描述來自EIP富文本編輯器，本來就是HTML，直接用innerHTML才看得到正確排版
   $('ticket-search-detail-desc').innerHTML = ticket.description || '(無說明)';
@@ -2455,8 +2464,7 @@ function updateBatchBar() {
   else if (qcStages.size > 1) replyBlock = '有的已轉品保有的還沒，批次回覆需要階段一致';
   // 已完成的單走「完成並送品保」，不能用一般的批次回覆(狀態選項不同)
   const finishedSelected = selected.filter(isFinishedTicket);
-  if (finishedSelected.length) replyBlock = '所選包含「已完成」的工單，請改用「完成並送品保」(一般批次回覆不適用)';
-  $('btn-batch-open').disabled = !!replyBlock;
+  if (finishedSelected.length) replyBlock = '所選包含「已完成」的工單，請改用「完成並送品保」(一般批次回覆不適用)';  $('btn-batch-open').disabled = !!replyBlock;
   $('btn-batch-open').title = replyBlock || '同一段回覆送到所選的每一張工單';
 
   // 完成並送品保：只能用在「已完成」狀態、而且是自己負責的工單(跟後端reply()的限制一致)
@@ -2473,6 +2481,7 @@ function updateBatchBar() {
     : '把所選工單轉給同一位工程師(僅限專管)';
 
   $('btn-batch-delete').classList.toggle('hidden', !state.canDeleteTicket);
+  $('btn-batch-edit').classList.toggle('hidden', !state.canEditAnyTicket); // 批量修改欄位僅限專管
 
   $('batch-bar-text').textContent = `已選 ${selected.length} 張工單${projectIds.size === 1 ? '(同一專案)' : `(${projectIds.size} 個專案)`}${replyBlock ? `　※${replyBlock}` : ''}`;
 }
@@ -3839,6 +3848,15 @@ $('btn-batch-transfer').addEventListener('click', () => {
   const assignees = Object.fromEntries(picked.map((t) => [String(t.id), t.p_user_id]));
   if (ids.length) openTransferTicketModal(ids, afterBatchTicketAction, undefined, assignees);
 });
+$('btn-batch-edit').addEventListener('click', () => {
+  const tickets = selectedTickets();
+  if (!tickets.length) return;
+  // 修改完留著勾選(可能還要接著改別的欄位)，只重新整理清單；左側正在看其中一張時一併重新讀取詳情
+  openBatchEditDialog(tickets, (doneIds) => {
+    refreshTicketList();
+    if (state.currentTicket && doneIds.map(String).includes(String(state.currentTicket.id))) openTicketDetail(state.currentTicket.id);
+  });
+});
 $('btn-batch-delete').addEventListener('click', () => {
   const tickets = selectedTickets();
   if (tickets.length) openDeleteTicketDialog(tickets, afterBatchTicketAction);
@@ -3915,6 +3933,7 @@ function tickAutoRefresh() {
     state.canEditAnyTicket = !!whoamiResult.can_edit_any_ticket;
     state.canDeleteTicket = !!whoamiResult.can_delete_ticket;
     versionPermission.canAdd = !!whoamiResult.can_add_version;
+    ticketEditPermission.canEdit = !!whoamiResult.can_edit_any_ticket;
   }
   await Promise.all([refreshAll(), loadTodos(), loadEngineers()]);
 })();

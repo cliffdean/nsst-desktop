@@ -181,6 +181,13 @@ async function updateTicketTimes(id, times) {
   return res.data.data;
 }
 
+// 一次改工單的多個欄位(批量修改用)，fields是{ start_time?, end_time?, kind?(陣列), severity?, task_stage?, version?, type? }，
+// 空值/沒帶的欄位後端不會改，回傳更新後的工單欄位
+async function updateTicketFields(id, fields) {
+  const res = await client().post(`/tickets/${id}/fields`, fields);
+  return res.data.data;
+}
+
 // 只改工單的系統功能版本，version是後端search-options回傳versions清單裡的value(project_version索引)
 async function updateTicketVersion(id, version) {
   const res = await client().post(`/tickets/${id}/version`, { version });
@@ -249,6 +256,7 @@ module.exports = {
   saveDesktopData,
   updateTicketTimes,
   updateTicketVersion,
+  updateTicketFields,
   addTicketVersion,
   attachFile,
   uploadFile,
