@@ -55,9 +55,17 @@ const LANGUAGE_RULE = '【語言規定】reply與commitMessage內的中文一律
 function buildTemplateBlock(templateText, todayDate, extraNote) {
   if (!templateText) return '';
   return (
-    `\n【回覆範本參考(請依照這份的語氣與結構調整，但要填入本次實際處理內容，不要照抄範本裡的佔位文字；` +
-    `範本裡如果有「送QC」「品保測試」之類的日期，那只是範例格式，一律換成下面【今天日期】給的實際日期，` +
-    `直接寫成完整的一行如「${todayDate} 送QC」，不要留下「(填寫送QC的日期)」這種要使用者自己填的提示文字${extraNote || ''})】\n${templateText}`
+    `
+【回覆範本參考(reply必須嚴格沿用這份範本的段落標題、順序與格式)】
+${templateText}
+` +
+    `【範本填寫規則】
+` +
+    `1. 範本裡括號內的提示文字(如「(需求描述)」)是占位符，必須替換成依工單需求與git異動歸納出的實際內容，不可原樣保留，且要連同包住提示文字的括號一起移除(只留內容本身，不要加括號)；
+` +
+    `2. 範本裡「送QC」「品保測試」等日期只是範例，一律換成今天日期「${todayDate}」，寫成完整一行如「${todayDate} 送QC」；
+` +
+    `3. 內容要精簡：只概述主要處理邏輯與做了什麼，讓其他人快速看懂即可，不要逐一列出欄位、參數、錯誤碼、檔名等實作細節，每個段落最多3~5點、每點一句話${extraNote || ''}`
   );
 }
 
@@ -90,7 +98,9 @@ ${noteBlock}
 4. 若git異動裡完全找不到與這張工單相關的內容，請在reply如實說明「本次提交未包含此工單相關異動」，不要硬湊。
 ${LANGUAGE_RULE}
 請用以下JSON格式回覆，不要加其他說明文字、不要用markdown code block包起來：
-{"reply": "工單回覆內容，條列式說明做了什麼、驗證方式，語氣正式、給客戶或PM看", "commitMessage": ${
+{"reply": "工單回覆內容，${
+    templateText ? '必須嚴格依照上方【回覆範本參考】的段落標題、順序與格式輸出(保留範本的標題與編號)，內容填入本次實際處理結果' : '條列式說明做了什麼、驗證方式'
+  }，語氣正式、給客戶或PM看", "commitMessage": ${
     needCommitMessage ? '"一行的conventional commit訊息，例如 fix: xxx 或 feat: xxx，主題要圍繞這張工單"' : '""'
   }}`;
 }
@@ -133,22 +143,31 @@ ${noteBlock}
 
 ${LANGUAGE_RULE}
 請用以下JSON格式回覆，不要加其他說明文字、不要用markdown code block包起來：
-{"reply": "共用工單回覆內容，需用工單編號分段列出每一張工單各自做了什麼、驗證方式，語氣正式、給客戶或PM看", "commitMessage": ${
+{"reply": "共用工單回覆內容，${
+    templateText ? '必須嚴格依照上方【回覆範本參考】的段落標題、順序與格式輸出，' : ''
+  }需用工單編號分段列出每一張工單各自做了什麼、驗證方式，語氣正式、給客戶或PM看", "commitMessage": ${
     needCommitMessage ? '"一行的conventional commit訊息，例如 fix: xxx 或 feat: xxx，主題要能涵蓋這幾張工單的共同異動"' : '""'
   }}`;
 }
 
-function parseResult(text) {
+// 保險：LLM沒換掉範本範例日期時，把「yyyy/mm/dd 送QC」的日期改成今天
+function fixQcDate(reply) {
+  // 整行被全形/半形括號包住的行(範本占位符的括號被照抄)，去掉外層括號
+  const unwrapped = (reply || '').replace(/^[ \t]*[（(]([^（）()\n]+)[）)][ \t]*$/gm, '$1');
+  return unwrapped.replace(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}(\s*送QC)/g, `${formatToday()}$1`);
+}
+
+function parseResult(text, needCommitMessage = true) {
   const trimmed = text.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
   try {
     const parsed = JSON.parse(trimmed);
     return {
-      reply: parsed.reply || trimmed,
-      commitMessage: parsed.commitMessage || '',
+      reply: fixQcDate(parsed.reply || trimmed),
+      commitMessage: needCommitMessage ? parsed.commitMessage || '' : '',
     };
   } catch (e) {
     // LLM沒有照格式回，就整段當作回覆內容，commit訊息留空讓使用者自己補
-    return { reply: trimmed, commitMessage: '' };
+    return { reply: fixQcDate(trimmed), commitMessage: '' };
   }
 }
 
@@ -168,14 +187,14 @@ async function callLlm(prompt) {
 async function generateTicketReply({ ticket, source, durationSeconds, userNote, templateText, typeLabel }) {
   const prompt = buildPrompt({ ticket, source, durationSeconds, userNote, templateText, typeLabel, todayDate: formatToday() });
   const text = await callLlm(prompt);
-  return parseResult(text);
+  return parseResult(text, source.mode !== 'commits');
 }
 
 // 批次提交專用：tickets是這次一起選取、要套用同一份回覆的工單陣列(同一個專案)
 async function generateBatchReply({ tickets, source, durationSeconds, userNote, templateText, typeLabel }) {
   const prompt = buildBatchPrompt({ tickets, source, durationSeconds, userNote, templateText, typeLabel, todayDate: formatToday() });
   const text = await callLlm(prompt);
-  return parseResult(text);
+  return parseResult(text, source.mode !== 'commits');
 }
 
 module.exports = { generateTicketReply, generateBatchReply };
