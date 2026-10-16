@@ -523,6 +523,7 @@ handle('eip:login', (username, password, override) => eipApi.login(username, pas
 handle('eip:search-install-lists', (q) => eipApi.searchInstallLists(q));
 handle('eip:get-install-list-by-project', (projectId) => eipApi.getInstallListByProject(projectId));
 handle('eip:get-install-list', (id, ticketsBeforeId) => eipApi.getInstallList(id, ticketsBeforeId));
+handle('eip:save-install-diagram', (id, body) => eipApi.saveInstallDiagram(id, body));
 handle('eip:list-engineers', () => eipApi.listEngineers());
 handle('eip:list-projects', (q, status, dept, starredOnly) => eipApi.listProjects(q, status, dept, starredOnly));
 handle('eip:project-dept-transfer', (projectId, dept) => eipApi.projectDeptTransfer(projectId, dept));

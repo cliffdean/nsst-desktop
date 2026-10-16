@@ -579,6 +579,17 @@
             <h4>連線設定</h4>
             <div id="install-detail-connection"></div>
             <p id="install-ping-result" style="color:#888;"></p>
+            <h4>網路架構圖</h4>
+            <div id="install-diagram">
+              <div class="install-diagram-toolbar">
+                <button id="btn-diagram-edit" type="button">編輯架構圖</button>
+                <button id="btn-diagram-upload" type="button">上傳 .drawio</button>
+                <button id="btn-diagram-download" type="button">下載 .drawio</button>
+                <input id="diagram-file-input" type="file" accept=".drawio,.xml" class="hidden" />
+              </div>
+              <div id="install-diagram-view" style="text-align:center;"></div>
+              <div id="install-diagram-editor" class="hidden"></div>
+            </div>
             <h4>相關工單</h4>
             <div id="install-detail-tickets"></div>
             <button id="btn-install-tickets-more" type="button" class="hidden">載入更早的工單</button>

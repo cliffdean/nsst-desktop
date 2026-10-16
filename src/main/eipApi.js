@@ -87,6 +87,12 @@ async function searchInstallLists(q) {
   return res.data.data;
 }
 
+// 儲存網路架構圖：body {xml?, svg?}，svg是draw.io匯出的data URL；未帶xml只更新預覽圖
+async function saveInstallDiagram(id, body) {
+  const res = await client().post(`/install-lists/${id}/diagram`, body);
+  return res.data.data;
+}
+
 async function getInstallListByProject(projectId) {
   const res = await client().get('/install-lists', { params: { project_id: projectId } });
   return res.data.data;
@@ -264,4 +270,5 @@ module.exports = {
   searchInstallLists,
   getInstallListByProject,
   getInstallList,
+  saveInstallDiagram,
 };
