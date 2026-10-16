@@ -631,133 +631,16 @@ async function openInstallDetail(id) {
   renderInstallDetailTickets(data.recent_tickets || [], data.recent_tickets_has_more);
 }
 
-// ---- 網路架構圖：查看顯示預覽圖，編輯時內嵌draw.io(同網頁版 project_install_diagram_script) ----
-const DRAWIO_URL = 'https://embed.diagrams.net';
-const diagram = { frame: null, mode: null, exitAfterSave: false, pendingExport: 0, xml: '', svg: '', id: null };
-
+// ---- 網路架構圖：只讀預覽圖，寬度撐滿(對照網頁版 img-responsive)；編輯請至網頁版 ----
 function renderInstallDiagram(data) {
-  closeDiagramFrame();
-  diagram.id = data.id;
-  diagram.xml = data.diagram_xml || '';
-  diagram.svg = data.diagram_svg || '';
   const view = $('install-diagram-view');
-  if (diagram.svg) {
-    view.innerHTML = `<img src="${diagram.svg}" alt="網路架構圖" style="max-width:100%;border:1px solid #ddd;" />`;
-  } else if (diagram.xml) {
-    view.innerHTML = '<p style="color:#888;">預覽圖產生中…</p>';
-    openDiagramFrame('preview'); // 上傳的.drawio尚無預覽圖：背景載入並匯出SVG
+  if (data.diagram_svg) {
+    view.innerHTML = `<img src="${data.diagram_svg}" alt="網路架構圖" style="width:100%;height:auto;border:1px solid #ddd;display:block;margin:auto;" />`;
+  } else if (data.diagram_xml) {
+    view.innerHTML = '<p style="color:#888;">預覽圖尚未產生，請先到網頁版開啟該案場的架構圖。</p>';
   } else {
-    view.innerHTML = '<p style="color:#888;">尚未建立網路架構圖，可點「編輯架構圖」線上繪製，或上傳 .drawio 檔案。</p>';
+    view.innerHTML = '<p style="color:#888;">尚未建立網路架構圖</p>';
   }
-}
-
-function diagramSend(obj) {
-  if (diagram.frame) diagram.frame.contentWindow.postMessage(JSON.stringify(obj), DRAWIO_URL);
-}
-
-function closeDiagramFrame() {
-  if (diagram.frame) diagram.frame.remove();
-  diagram.frame = null;
-  diagram.mode = null;
-  diagram.exitAfterSave = false;
-  diagram.pendingExport = 0;
-  $('install-diagram-editor').classList.add('hidden');
-  $('install-diagram-view').classList.remove('hidden');
-  $('btn-diagram-edit').disabled = false;
-}
-
-function openDiagramFrame(mode) {
-  closeDiagramFrame();
-  diagram.mode = mode;
-  const f = document.createElement('iframe');
-  f.referrerPolicy = 'no-referrer';
-  f.src = `${DRAWIO_URL}/?embed=1&proto=json&spin=1&ui=kennedy&lang=zh-tw&saveAndExit=1&noExitBtn=0&libs=general;network2;network`;
-  diagram.frame = f;
-  if (mode === 'edit') {
-    f.style.cssText = 'width:100%;height:70vh;border:1px solid #ddd;';
-    $('install-diagram-view').classList.add('hidden');
-    $('btn-diagram-edit').disabled = true;
-    const box = $('install-diagram-editor');
-    box.classList.remove('hidden');
-    box.appendChild(f);
-  } else {
-    f.style.cssText = 'position:absolute;left:-9999px;top:0;width:1000px;height:700px;';
-    document.body.appendChild(f);
-  }
-}
-
-function showDiagramSvg(dataUrl) {
-  diagram.svg = dataUrl;
-  $('install-diagram-view').innerHTML = `<img src="${dataUrl}" alt="網路架構圖" style="max-width:100%;border:1px solid #ddd;" />`;
-}
-
-window.addEventListener('message', (evt) => {
-  if (!diagram.frame || evt.source !== diagram.frame.contentWindow || evt.origin !== DRAWIO_URL) return;
-  let msg;
-  try {
-    msg = JSON.parse(evt.data);
-  } catch (e) {
-    return;
-  }
-  const id = diagram.id;
-  switch (msg.event) {
-    case 'init':
-      diagramSend({ action: 'load', autosave: 0, xml: diagram.xml || '' });
-      break;
-    case 'load':
-      if (diagram.mode === 'preview') diagramSend({ action: 'export', format: 'svg' });
-      break;
-    case 'save':
-      diagram.xml = msg.xml;
-      if (msg.exit) diagram.exitAfterSave = true;
-      diagram.pendingExport++;
-      call(window.api.eip.saveInstallDiagram(id, { xml: msg.xml }), (err) => alert('儲存架構圖失敗：' + err));
-      diagramSend({ action: 'export', format: 'svg', xml: msg.xml });
-      break;
-    case 'export':
-      diagram.pendingExport = Math.max(0, diagram.pendingExport - 1);
-      call(window.api.eip.saveInstallDiagram(id, { svg: msg.data }), (err) => alert('儲存預覽圖失敗：' + err)).then(() => {
-        showDiagramSvg(msg.data);
-        if (diagram.mode === 'preview' || diagram.exitAfterSave) closeDiagramFrame();
-        else diagramSend({ action: 'status', message: '已儲存', modified: false });
-      });
-      break;
-    case 'exit':
-      if (diagram.pendingExport > 0) {
-        diagram.exitAfterSave = true;
-        break;
-      }
-      if (msg.modified && !diagram.exitAfterSave && !confirm('尚有未儲存的變更，確定要離開編輯？')) break;
-      closeDiagramFrame();
-      break;
-  }
-});
-
-async function uploadDiagramFile(file) {
-  if (!file || !diagram.id) return;
-  const xml = await file.text();
-  if (!xml.includes('<mxfile') && !xml.includes('<mxGraphModel')) {
-    alert('不是有效的 .drawio 檔案');
-    return;
-  }
-  // 先存XML並清掉舊預覽圖，再背景載入匯出新的SVG預覽
-  const saved = await call(window.api.eip.saveInstallDiagram(diagram.id, { xml }), (err) => alert('上傳失敗：' + err));
-  if (!saved) return;
-  diagram.xml = xml;
-  diagram.svg = '';
-  $('install-diagram-view').innerHTML = '<p style="color:#888;">預覽圖產生中…</p>';
-  openDiagramFrame('preview');
-}
-
-function downloadDiagram() {
-  if (!diagram.xml) return alert('尚無網路架構圖可下載');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([diagram.xml], { type: 'application/xml' }));
-  a.download = `network-diagram-${diagram.id}.drawio`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(a.href);
 }
 
 // 相關工單一列一筆，帶上負責人員(=一般認知的「這張工單是誰完成的」)，並依recent_tickets_has_more決定要不要顯示「載入更早的工單」
@@ -3764,13 +3647,6 @@ $('btn-open-install-search').addEventListener('click', openInstallPanel);
 $('btn-install-back').addEventListener('click', closeInstallPanel);
 $('btn-install-detail-close').addEventListener('click', closeInstallDetail);
 $('btn-install-tickets-more').addEventListener('click', loadMoreInstallTickets);
-$('btn-diagram-edit').addEventListener('click', () => openDiagramFrame('edit'));
-$('btn-diagram-upload').addEventListener('click', () => $('diagram-file-input').click());
-$('diagram-file-input').addEventListener('change', (e) => {
-  uploadDiagramFile(e.target.files[0]);
-  e.target.value = '';
-});
-$('btn-diagram-download').addEventListener('click', downloadDiagram);
 $('btn-open-project-search').addEventListener('click', () => openProjectPanel());
 $('btn-open-project-progress').addEventListener('click', () => call(window.api.window.openProgress()));
 $('btn-project-back').addEventListener('click', closeProjectPanel);

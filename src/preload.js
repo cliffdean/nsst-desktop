@@ -61,7 +61,6 @@ contextBridge.exposeInMainWorld('api', {
     searchInstallLists: invoke('eip:search-install-lists'),
     getInstallListByProject: invoke('eip:get-install-list-by-project'),
     getInstallList: invoke('eip:get-install-list'),
-    saveInstallDiagram: invoke('eip:save-install-diagram'),
     listTickets: invoke('eip:list-tickets'),
     searchTickets: invoke('eip:search-tickets'),
     advancedSearchTickets: invoke('eip:advanced-search-tickets'),
