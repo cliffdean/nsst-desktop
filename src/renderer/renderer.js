@@ -511,6 +511,7 @@ let installSearchTimer = null;
 
 // 裝機單查詢顯示在右側欄，跟信箱/行事曆/工單查詢互斥切換，左邊工單清單不受影響、隨時看得到
 function openInstallPanel() {
+  if (state.installReturnTo !== undefined) setInstallReturnTo(null); // 一般開啟就是回信箱；跳轉時由呼叫端再設定
   // 工單詳情跟裝機單現在分別在左右兩欄，互不影響，可以同時對照著看
   $('sidebar-default-view').classList.add('hidden');
   // 工單查詢/裝機單查詢/專案查詢共用右側欄位置，畫面互斥，開其中一個要先關掉其他的，不然會疊在一起打架
@@ -527,7 +528,10 @@ function openInstallPanel() {
 
 function closeInstallPanel() {
   $('install-panel').classList.add('hidden');
-  $('sidebar-default-view').classList.remove('hidden');
+  const back = state.installReturnTo;
+  setInstallReturnTo(null);
+  if (back) $(back).classList.remove('hidden'); // 從工單/專案跳過來的：回到原本的面板，搜尋結果與詳情都還在
+  else $('sidebar-default-view').classList.remove('hidden');
 }
 
 // 只收起下面的案場詳情，列表與搜尋條件維持原樣，列表區還原成整頁高度
@@ -702,8 +706,18 @@ async function jumpToInstallListByProject(projectId) {
     alert('這個專案目前沒有對應的裝機單資料');
     return;
   }
+  // 記住是從哪個右側面板跳過來的(工單查詢/專案查詢)，返回時原樣還原，不用重新搜尋
+  const from = ['ticket-search-panel', 'project-panel'].find((id) => !$(id).classList.contains('hidden'));
   openInstallPanel();
+  setInstallReturnTo(from || null);
   openInstallDetail(results[0].id);
+}
+
+const INSTALL_RETURN_LABELS = { 'ticket-search-panel': '← 返回工單查詢', 'project-panel': '← 返回專案查詢' };
+
+function setInstallReturnTo(panelId) {
+  state.installReturnTo = panelId;
+  $('btn-install-back').textContent = panelId ? INSTALL_RETURN_LABELS[panelId] : '返回信箱／行事曆';
 }
 
 async function jumpToSiteFromTicket() {
@@ -1076,11 +1090,30 @@ async function sendProjectTicketsToLeft() {
   const project = projectPanel.projects.find((p) => String(p.id) === String(sel.projectId));
   if (!project) return;
   const stageInfo = sel.stage != null ? project.stages.find((s) => s.index === sel.stage) : null;
-  const alreadyInView = !!state.projectView;
-  state.projectView = {
+  await openTicketsInLeftView({
     project,
     filters: currentProjectTicketFilters(project, sel),
     label: `${project.name}　${stageInfo ? stageInfo.name : '全部階段'}`,
+  });
+}
+
+// 工單查詢(簡易/進階)的結果放到左側：簡易搜尋走 /tickets/search(q)，進階搜尋走 advanced-search(filters)
+async function sendTicketSearchToLeft() {
+  if (state.advSearch.active) {
+    const filters = collectAdvFilters(1);
+    filters.per_page = 100;
+    await openTicketsInLeftView({ filters, label: '工單查詢(進階搜尋)' });
+  } else {
+    const q = $('ticket-search-query').value.trim();
+    await openTicketsInLeftView({ q, label: q ? `工單查詢「${q}」` : '工單查詢' });
+  }
+}
+
+// spec：{ project?, filters? | q?, label }；filters=進階搜尋條件(逐頁讀完)，q=簡易搜尋關鍵字(一次回傳)
+async function openTicketsInLeftView(spec) {
+  const alreadyInView = !!state.projectView;
+  state.projectView = {
+    ...spec,
     engineerId: null, // 工程師選單的篩選：null=全部；選了人就只看這個人的單(分配後的單會從原本的人身上消失)
     prevSelect: alreadyInView ? state.projectView.prevSelect : $('engineer-select').value, // 離開時要選回去的人
   };
@@ -1100,7 +1133,14 @@ async function loadProjectViewTickets() {
   const view = state.projectView;
   if (!view) return;
   const items = [];
-  for (let page = 1; page <= 10; page++) {
+  if (!view.filters) { // 簡易搜尋：一次回傳全部符合的，不分頁
+    const res = await call(window.api.eip.searchTickets(view.q), (err) => {
+      if (state.projectView === view) $('ticket-list').innerHTML = `<p style="color:#d84f4f;">讀取工單失敗：${escapeHtml(err)}</p>`;
+    });
+    if (!res || state.projectView !== view) return;
+    items.push(...res);
+  }
+  for (let page = 1; view.filters && page <= 10; page++) {
     const res = await call(window.api.eip.advancedSearchTickets({ ...view.filters, page }), (err) => {
       if (state.projectView === view) $('ticket-list').innerHTML = `<p style="color:#d84f4f;">讀取專案工單失敗：${escapeHtml(err)}</p>`;
     });
@@ -3838,6 +3878,7 @@ document.querySelectorAll('#ticket-range .range-btn').forEach((el) => {
   el.addEventListener('click', () => switchTicketRange(el.dataset.range));
 });
 $('btn-project-tickets-to-left').addEventListener('click', sendProjectTicketsToLeft);
+$('btn-ts-to-left').addEventListener('click', sendTicketSearchToLeft);
 $('btn-project-view-exit').addEventListener('click', exitProjectView);
 $('btn-project-view-reload').addEventListener('click', () => {
   $('ticket-list').innerHTML = '<p style="color:#888;">讀取中...</p>';

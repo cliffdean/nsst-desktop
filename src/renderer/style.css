@@ -866,6 +866,8 @@ button.busy { opacity: .7; cursor: progress; }
 .ticket-shown-count { flex: none; font-size: 12px; color: #555; white-space: nowrap; }
 .project-view-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin-bottom: 8px; padding: 4px 8px; background: #e8f0fe; border: 1px solid #b6ccf5; border-radius: 4px; font-size: 12px; }
 .project-view-bar span { flex: 1 1 auto; font-weight: 600; color: #1a4fb3; min-width: 0; }
+.ts-left-row { margin: 4px 0; text-align: right; }
+.ts-left-row button { padding: 2px 8px; font-size: 12px; }
 .project-view-bar button { flex: none; padding: 2px 8px; font-size: 12px; }
 
 .ticket-status-chip.status-preset { background: #fff; color: #333; border: 1px solid #999; margin-right: 6px; }
