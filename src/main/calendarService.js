@@ -14,14 +14,43 @@ function unfoldIcs(ics) {
   return ics.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
 }
 
-function parseIcsDate(value) {
+// 把「某時區的牆上時間」轉成正確的Date。先當UTC猜一個，再用Intl算出該時區在那個時間點的位移後修正
+function zonedTimeToDate(y, mo, d, h, mi, s, timeZone) {
+  const wall = Date.UTC(y, mo, d, h, mi, s);
+  const offsetAt = (ts) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric',
+    }).formatToParts(new Date(ts));
+    const p = {};
+    for (const x of parts) p[x.type] = +x.value;
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - ts;
+  };
+  let ts = wall - offsetAt(wall);
+  ts = wall - offsetAt(ts);
+  return new Date(ts);
+}
+
+function parseIcsDate(value, tzid) {
   if (!value) return null;
-  const m = value.match(/^(\d{4})(\d{2})(\d{2})(T(\d{2})(\d{2})(\d{2})Z?)?$/);
+  const m = value.match(/^(\d{4})(\d{2})(\d{2})(T(\d{2})(\d{2})(\d{2})(Z?))?$/);
   if (!m) return null;
-  if (m[4]) {
-    return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[5], +m[6], +m[7]));
+  if (!m[4]) {
+    return new Date(+m[1], +m[2] - 1, +m[3]); // 全天事件，用本地日期
   }
-  return new Date(+m[1], +m[2] - 1, +m[3]); // 全天事件，用本地日期
+  if (m[8]) {
+    return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[5], +m[6], +m[7])); // 結尾Z=UTC
+  }
+  if (tzid) {
+    try {
+      return zonedTimeToDate(+m[1], +m[2] - 1, +m[3], +m[5], +m[6], +m[7], tzid);
+    } catch (e) {
+      // 不認得的時區名稱(例如Windows格式)，退回當本地時間
+    }
+  }
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[5], +m[6], +m[7]); // 浮動時間，當本地時間
 }
 
 function parseVEvents(icsText) {
@@ -39,15 +68,16 @@ function parseVEvents(icsText) {
       const rawKey = line.slice(0, idx);
       const value = line.slice(idx + 1);
       const key = rawKey.split(';')[0];
-      fields[key] = { value, allDay: rawKey.includes('VALUE=DATE') };
+      const tzMatch = rawKey.match(/TZID=("?)([^";:]+)\1/);
+      fields[key] = { value, allDay: rawKey.includes('VALUE=DATE'), tzid: tzMatch ? tzMatch[2] : null };
     }
     if (!fields.SUMMARY && !fields.DTSTART) continue;
     events.push({
       uid: fields.UID ? fields.UID.value : null,
       summary: fields.SUMMARY ? fields.SUMMARY.value : '(無標題)',
       description: fields.DESCRIPTION ? fields.DESCRIPTION.value.replace(/\\n/g, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';') : '',
-      start: fields.DTSTART ? parseIcsDate(fields.DTSTART.value) : null,
-      end: fields.DTEND ? parseIcsDate(fields.DTEND.value) : null,
+      start: fields.DTSTART ? parseIcsDate(fields.DTSTART.value, fields.DTSTART.tzid) : null,
+      end: fields.DTEND ? parseIcsDate(fields.DTEND.value, fields.DTEND.tzid) : null,
       allDay: fields.DTSTART ? fields.DTSTART.allDay : false,
     });
   }
