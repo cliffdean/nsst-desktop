@@ -1167,12 +1167,6 @@ function enterProjectViewEngineerSelect() {
     opt.dataset.all = '1';
     sel.insertBefore(opt, sel.firstChild);
   }
-  if (!sel.querySelector('option[data-none]')) {
-    const none = document.createElement('option');
-    none.value = 'none';
-    none.dataset.none = '1';
-    sel.insertBefore(none, sel.querySelector('option[data-all]').nextSibling);
-  }
   sel.value = '';
   updateProjectViewEngineerCounts();
 }
@@ -1201,8 +1195,6 @@ function leaveProjectViewEngineerSelect(prevValue) {
   const sel = $('engineer-select');
   const all = sel.querySelector('option[data-all]');
   if (all) all.remove();
-  const none = sel.querySelector('option[data-none]');
-  if (none) none.remove();
   sel.querySelectorAll('option').forEach((o) => {
     if (o.dataset.base !== undefined) {
       o.textContent = o.dataset.base;
@@ -2305,7 +2297,7 @@ function switchTab(tab) {
 // ---------------- 歷史記錄分頁(已完成：成功4/已關閉8) ----------------
 
 function historyAssigneeId() {
-  return state.viewUserId || state.currentUserId;
+  return state.viewUserId === 'none' ? null : (state.viewUserId || state.currentUserId);
 }
 
 // reset=true：重新從第一頁讀(切換分頁/工程師/搜尋字時)；否則接著讀下一頁
@@ -2986,6 +2978,7 @@ async function loadEngineers() {
   const engineering = engineers.filter((u) => u.is_engineering);
   const others = engineers.filter((u) => !u.is_engineering);
   $('engineer-select').innerHTML =
+    '<option value="none" data-none="1">未指派</option>' +
     (engineering.length ? `<optgroup label="工程部">${engineering.map(optionHtml).join('')}</optgroup>` : '') +
     (others.length ? `<optgroup label="其他人員">${others.map(optionHtml).join('')}</optgroup>` : '');
   if (state.currentUserId != null) $('engineer-select').value = String(state.currentUserId);
@@ -3000,11 +2993,12 @@ function switchEngineer() {
     updateBatchBar();
     return;
   }
+  const unassigned = $('engineer-select').value === 'none';
   const id = Number($('engineer-select').value);
-  state.viewUserId = id && id !== Number(state.currentUserId) ? id : null;
+  state.viewUserId = unassigned ? 'none' : id && id !== Number(state.currentUserId) ? id : null;
   const viewing = isViewingOtherEngineer();
   const who = viewing ? (state.engineers.find((u) => Number(u.id) === id) || {}).name : '';
-  $('topbar-title').textContent = viewing ? `${who} 的工單` : '我的工單';
+  $('topbar-title').textContent = unassigned ? '未指派的工單' : viewing ? `${who} 的工單` : '我的工單';
   $('engineer-readonly-hint').textContent = state.canEditAnyTicket ? '檢視他人工單（專管可回覆）' : '檢視他人工單，僅供查看';
   $('engineer-readonly-hint').classList.toggle('hidden', !viewing);
   state.selectedIds.clear();
@@ -3047,11 +3041,17 @@ async function refreshTicketList() {
     return { label: '工單', count: 0 };
   }
   const viewUserId = state.viewUserId;
-  const assigneeId = viewUserId || state.currentUserId;
+  const unassigned = viewUserId === 'none';
+  const assigneeId = unassigned ? null : (viewUserId || state.currentUserId);
   const [tickets, timers, finishedRes] = await Promise.all([
-    call(window.api.eip.listTickets(state.ticketRange === 'next' ? nextFridayDateStr() : state.ticketRange === 'all' ? '2099-12-31' : null, viewUserId), (err) => {
-      if (state.viewUserId === viewUserId) $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
-    }),
+    // 未指派：新任務(狀態0)還沒有負責人，用進階搜尋撈全站狀態0的單
+    unassigned
+      ? call(window.api.eip.advancedSearchTickets({ status: '0', per_page: 100, order_by: 'updated_at', order_dir: 'desc' }), (err) => {
+        if (state.viewUserId === viewUserId) $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
+      }).then((r) => (r ? r.items : r))
+      : call(window.api.eip.listTickets(state.ticketRange === 'next' ? nextFridayDateStr() : state.ticketRange === 'all' ? '2099-12-31' : null, viewUserId), (err) => {
+        if (state.viewUserId === viewUserId) $('ticket-list').innerHTML = `<p>讀取工單失敗：${err}</p>`;
+      }),
     call(window.api.timer.getAll()),
     // 「已完成」(品保通過)的工單後端的待辦清單不會回傳，但流程上還要工程師回覆並設為成功，所以另外查出來一起列
     assigneeId
