@@ -24,9 +24,15 @@ function formatDuration(durationSeconds) {
 // uncommitted=目前工作區還沒commit的變更，這就是這次要做的內容，還需要生成commit訊息
 // 單張工單與批次工單共用同一套來源說明邏輯，只有前面包的工單資訊區塊不同
 function buildSourceBlock(source) {
-  const needCommitMessage = source.mode !== 'commits';
+  // none=本次不涉及程式碼修改(設定調整、資料處理、確認回覆等)，沒有git來源，也不需要commit訊息
+  const needCommitMessage = source.mode === 'uncommitted';
   let sourceText;
-  if (source.mode === 'commits') {
+  if (source.mode === 'none') {
+    sourceText =
+      '【本次處理性質】本次不涉及任何程式碼修改，沒有git異動可參考，commitMessage請回空字串。\n' +
+      '請完全依據【使用者補充說明／參考】與工單需求說明，整理出實際處理內容與結果，套用回覆範本格式並潤飾成正式語氣；\n' +
+      '嚴禁捏造程式碼修改、檔案異動、git提交等內容，補充說明沒提到的處理動作不要自行編造；範本中專屬於程式修改的段落，若無對應內容，請簡短註明「本次無程式碼異動」。';
+  } else if (source.mode === 'commits') {
     sourceText =
       `【本次參考的git提交紀錄(已經commit過了，不需要再產生commit訊息，commitMessage請回空字串)】\n` +
       source.commits
@@ -71,6 +77,7 @@ ${templateText}
 
 function buildPrompt({ ticket, source, durationSeconds, userNote, templateText, typeLabel, todayDate }) {
   const { sourceText, needCommitMessage } = buildSourceBlock(source);
+  const noCode = source.mode === 'none';
 
   const typeBlock = typeLabel ? `\n【工單類型】${typeLabel}` : '';
   const templateBlock = buildTemplateBlock(templateText, todayDate);
@@ -78,7 +85,7 @@ function buildPrompt({ ticket, source, durationSeconds, userNote, templateText, 
     ? `\n【使用者補充說明／參考】\n${userNote}\n(請把以上補充說明的重點融合進工單回覆${needCommitMessage ? '與commit訊息' : ''}中)`
     : '';
 
-  return `你是資深工程師，要幫忙把下面的工單需求跟這次實際修改的程式碼，整理成「工單回覆」${needCommitMessage ? '與「git commit訊息」' : ''}。
+  return `你是資深工程師，要幫忙把下面的工單需求跟${noCode ? '使用者補充的處理說明' : '這次實際修改的程式碼'}，整理成「工單回覆」${needCommitMessage ? '與「git commit訊息」' : ''}。
 ${typeBlock}
 【工單編號】${ticket.id}
 【工單標題】${ticket.name || ''} / ${ticket.summary || ''}
@@ -91,11 +98,15 @@ ${sourceText}
 ${templateBlock}
 ${noteBlock}
 
-【範圍規定】下面的git異動(commit/diff)可能一次包含多張工單的內容，你只負責「這一張工單」：
+${
+    noCode
+      ? '【範圍規定】本次無程式碼異動，reply只能依據工單需求與使用者補充說明撰寫，不可捏造任何程式修改內容。'
+      : `【範圍規定】下面的git異動(commit/diff)可能一次包含多張工單的內容，你只負責「這一張工單」：
 1. 先依工單標題與需求說明判斷範圍，只挑出與這張工單直接相關的檔案與異動來說明；
 2. 與這張工單無關的異動(其他功能、其他工單、順手修改)一律不要寫進reply，也不要提到有其他異動；
 3. 說明內容必須以git實際修改為依據(改了哪些檔案、邏輯)，不可憑空捏造沒有改過的內容；
-4. 若git異動裡完全找不到與這張工單相關的內容，請在reply如實說明「本次提交未包含此工單相關異動」，不要硬湊。
+4. 若git異動裡完全找不到與這張工單相關的內容，請在reply如實說明「本次提交未包含此工單相關異動」，不要硬湊。`
+  }
 ${LANGUAGE_RULE}
 請用以下JSON格式回覆，不要加其他說明文字、不要用markdown code block包起來：
 {"reply": "工單回覆內容，${
@@ -187,14 +198,14 @@ async function callLlm(prompt) {
 async function generateTicketReply({ ticket, source, durationSeconds, userNote, templateText, typeLabel }) {
   const prompt = buildPrompt({ ticket, source, durationSeconds, userNote, templateText, typeLabel, todayDate: formatToday() });
   const text = await callLlm(prompt);
-  return parseResult(text, source.mode !== 'commits');
+  return parseResult(text, source.mode === 'uncommitted');
 }
 
 // 批次提交專用：tickets是這次一起選取、要套用同一份回覆的工單陣列(同一個專案)
 async function generateBatchReply({ tickets, source, durationSeconds, userNote, templateText, typeLabel }) {
   const prompt = buildBatchPrompt({ tickets, source, durationSeconds, userNote, templateText, typeLabel, todayDate: formatToday() });
   const text = await callLlm(prompt);
-  return parseResult(text, source.mode !== 'commits');
+  return parseResult(text, source.mode === 'uncommitted');
 }
 
 module.exports = { generateTicketReply, generateBatchReply };

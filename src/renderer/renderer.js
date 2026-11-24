@@ -1167,6 +1167,12 @@ function enterProjectViewEngineerSelect() {
     opt.dataset.all = '1';
     sel.insertBefore(opt, sel.firstChild);
   }
+  if (!sel.querySelector('option[data-none]')) {
+    const none = document.createElement('option');
+    none.value = 'none';
+    none.dataset.none = '1';
+    sel.insertBefore(none, sel.querySelector('option[data-all]').nextSibling);
+  }
   sel.value = '';
   updateProjectViewEngineerCounts();
 }
@@ -1175,11 +1181,17 @@ function updateProjectViewEngineerCounts() {
   const view = state.projectView;
   if (!view) return;
   const counts = {};
-  state.tickets.forEach((t) => { counts[String(t.p_user_id)] = (counts[String(t.p_user_id)] || 0) + 1; });
+  let noneCount = 0;
+  state.tickets.forEach((t) => {
+    if (!t.p_user_id) noneCount++;
+    else counts[String(t.p_user_id)] = (counts[String(t.p_user_id)] || 0) + 1;
+  });
   const sel = $('engineer-select');
   sel.querySelectorAll('option').forEach((o) => {
     if (o.dataset.base === undefined) o.dataset.base = o.textContent;
-    o.textContent = o.dataset.all ? `全部(${state.tickets.length})` : `${o.dataset.base}(${counts[o.value] || 0})`;
+    o.textContent = o.dataset.all ? `全部(${state.tickets.length})`
+      : o.dataset.none ? `未指派(${noneCount})`
+      : `${o.dataset.base}(${counts[o.value] || 0})`;
   });
   sel.value = view.engineerId == null ? '' : String(view.engineerId);
 }
@@ -1189,6 +1201,8 @@ function leaveProjectViewEngineerSelect(prevValue) {
   const sel = $('engineer-select');
   const all = sel.querySelector('option[data-all]');
   if (all) all.remove();
+  const none = sel.querySelector('option[data-none]');
+  if (none) none.remove();
   sel.querySelectorAll('option').forEach((o) => {
     if (o.dataset.base !== undefined) {
       o.textContent = o.dataset.base;
@@ -2231,7 +2245,7 @@ function timerControlsHtml(ticket) {
 
 function filteredTickets() {
   const byTab = state.projectView
-    ? (state.projectView.engineerId == null ? state.tickets : state.tickets.filter((t) => String(t.p_user_id) === String(state.projectView.engineerId)))
+    ? (state.projectView.engineerId == null ? state.tickets : state.tickets.filter((t) => state.projectView.engineerId === 'none' ? !t.p_user_id : String(t.p_user_id) === String(state.projectView.engineerId)))
     : state.tickets.filter((t) => (state.activeTab === 'qc' ? t.is_qc_stage : !t.is_qc_stage));
   const q = state.searchQuery.trim().toLowerCase();
   const filtered = !q ? byTab : byTab.filter((t) => {
@@ -2681,6 +2695,16 @@ async function loadBatchCommitsList() {
   filterCommitList($('batch-git-commits-list'), $('batch-git-commits-filter').value);
 }
 
+// 未提交模式下，工作區有任何變更(檔案/diff/期間內commit)才算有git來源，否則自動改走「無程式碼異動」
+function hasGitChanges(c) {
+  return !!(
+    (c.changedFiles && c.changedFiles.length) ||
+    c.diffStaged ||
+    c.diffUnstaged ||
+    (c.commitsSince && c.commitsSince.length)
+  );
+}
+
 async function generateBatchAiReply() {
   const selected = selectedTickets();
   if (selected.length < 2) return;
@@ -2689,26 +2713,48 @@ async function generateBatchAiReply() {
   const mode = document.querySelector('input[name="batch-git-source-mode"]:checked').value;
   const projectId = selected[0].project_id;
   let source;
+  let autoNone = '';
+  const hasNote = !!$('batch-git-extra-note').value.trim();
 
-  if (mode === 'commits') {
+  if (mode === 'none') {
+    if (!hasNote) {
+      $('batch-ai-status').textContent = '無程式碼異動時，請先在「額外說明」填寫本次處理內容';
+      return;
+    }
+    source = { mode: 'none' };
+  } else if (mode === 'commits') {
     const checked = Array.from($('batch-git-commits-list').querySelectorAll('input[type="checkbox"]:checked')).map(
       (el) => el.value
     );
     if (!checked.length) {
-      $('batch-ai-status').textContent = '請先載入並勾選至少一筆commit';
+      if (!hasNote) {
+        $('batch-ai-status').textContent = '請先載入並勾選至少一筆commit(或在額外說明填寫處理內容，改以無程式碼異動產生)';
+        return;
+      }
+      source = { mode: 'none' };
+      autoNone = '未勾選commit';
+    } else {
+      const detail = await call(window.api.git.getCommitsDetail(projectId, checked), (err) => {
+        $('batch-ai-status').textContent = '讀取Git commit失敗：' + err;
+      });
+      if (!detail) return;
+      source = { mode: 'commits', commits: detail.commits };
+    }
+  } else {
+    let gitErr = '';
+    const gitChanges = await call(window.api.git.collectChanges(null, projectId), (err) => {
+      gitErr = err;
+      if (!hasNote) $('batch-ai-status').textContent = '讀取Git失敗：' + err;
+    });
+    if (gitChanges && hasGitChanges(gitChanges)) {
+      source = { mode: 'uncommitted', ...gitChanges };
+    } else if (hasNote) {
+      source = { mode: 'none' };
+      autoNone = gitChanges ? '目前沒有未提交的變更' : `讀取Git失敗：${gitErr}`;
+    } else {
+      if (gitChanges) $('batch-ai-status').textContent = '目前沒有未提交的變更，請在額外說明填寫處理內容(改以無程式碼異動產生)，或改選已提交的commit';
       return;
     }
-    const detail = await call(window.api.git.getCommitsDetail(projectId, checked), (err) => {
-      $('batch-ai-status').textContent = '讀取Git commit失敗：' + err;
-    });
-    if (!detail) return;
-    source = { mode: 'commits', commits: detail.commits };
-  } else {
-    const gitChanges = await call(window.api.git.collectChanges(null, projectId), (err) => {
-      $('batch-ai-status').textContent = '讀取Git失敗：' + err;
-    });
-    if (!gitChanges) return;
-    source = { mode: 'uncommitted', ...gitChanges };
   }
 
   // 批次列表(state.tickets)本身沒有description，AI要寫回覆需要每張單真正的需求說明，逐張補抓完整資料
@@ -2743,7 +2789,9 @@ async function generateBatchAiReply() {
 
   $('batch-reply-info').value = result.reply || '';
   $('batch-reply-commit-message').value = withTicketPrefix(result.commitMessage, selected.map((t) => t.id));
-  $('batch-ai-status').textContent = '已產生，請自行確認/編輯後再送出(批次不會自動執行git commit，commit訊息請自行複製手動提交)。';
+  $('batch-ai-status').textContent = `已產生${
+    autoNone ? `(${autoNone}，已自動改用無程式碼異動模式)` : ''
+  }，請自行確認/編輯後再送出(批次不會自動執行git commit，commit訊息請自行複製手動提交)。`;
 }
 
 async function onCardTimerAction(ticketId, action) {
@@ -2945,7 +2993,8 @@ async function loadEngineers() {
 
 function switchEngineer() {
   if (state.projectView) { // 專案工單檢視中：選工程師=只看這個人的單，不是切換成看他的待辦清單
-    state.projectView.engineerId = $('engineer-select').value === '' ? null : Number($('engineer-select').value);
+    const v = $('engineer-select').value;
+    state.projectView.engineerId = v === '' ? null : v === 'none' ? 'none' : Number(v);
     state.selectedIds.clear(); // 換了篩選，之前勾選(可能已看不到)的先清掉，避免誤轉看不見的單
     renderTicketList();
     updateBatchBar();
@@ -3491,32 +3540,55 @@ async function generateAiReply() {
   const timer = state.timers[state.currentTicket.id];
   let source;
   let repoPathForStatus = '';
+  let autoNone = '';
+  const hasNote = !!$('git-extra-note').value.trim();
 
-  if (mode === 'commits') {
+  if (mode === 'none') {
+    if (!hasNote) {
+      $('ai-status').textContent = '無程式碼異動時，請先在「額外說明」填寫本次處理內容';
+      return;
+    }
+    source = { mode: 'none' };
+  } else if (mode === 'commits') {
     const checked = Array.from($('git-commits-list').querySelectorAll('input[type="checkbox"]:checked')).map(
       (el) => el.value
     );
     if (!checked.length) {
-      $('ai-status').textContent = '請先載入並勾選至少一筆commit';
-      return;
+      if (!hasNote) {
+        $('ai-status').textContent = '請先載入並勾選至少一筆commit(或在額外說明填寫處理內容，改以無程式碼異動產生)';
+        return;
+      }
+      source = { mode: 'none' };
+      autoNone = '未勾選commit';
+    } else {
+      const detail = await call(window.api.git.getCommitsDetail(projectId, checked), (err) => {
+        $('ai-status').textContent = '讀取Git commit失敗：' + err;
+      });
+      if (!detail) return;
+      source = { mode: 'commits', commits: detail.commits };
+      repoPathForStatus = detail.repoPath;
     }
-    const detail = await call(window.api.git.getCommitsDetail(projectId, checked), (err) => {
-      $('ai-status').textContent = '讀取Git commit失敗：' + err;
-    });
-    if (!detail) return;
-    source = { mode: 'commits', commits: detail.commits };
-    repoPathForStatus = detail.repoPath;
   } else {
     const sinceIso = timer && timer.segments.length ? timer.segments[0].start : null;
+    let gitErr = '';
     const gitChanges = await call(
       window.api.git.collectChanges(sinceIso, projectId),
       (err) => {
-        $('ai-status').textContent = '讀取Git失敗：' + err;
+        gitErr = err;
+        // 有額外說明時，git讀不到就自動改走「無程式碼異動」，不先報錯
+        if (!hasNote) $('ai-status').textContent = '讀取Git失敗：' + err;
       }
     );
-    if (!gitChanges) return;
-    source = { mode: 'uncommitted', ...gitChanges };
-    repoPathForStatus = gitChanges.repoPath;
+    if (gitChanges && hasGitChanges(gitChanges)) {
+      source = { mode: 'uncommitted', ...gitChanges };
+      repoPathForStatus = gitChanges.repoPath;
+    } else if (hasNote) {
+      source = { mode: 'none' };
+      autoNone = gitChanges ? '目前沒有未提交的變更' : `讀取Git失敗：${gitErr}`;
+    } else {
+      if (gitChanges) $('ai-status').textContent = '目前沒有未提交的變更，請在額外說明填寫處理內容(改以無程式碼異動產生)，或改選已提交的commit';
+      return;
+    }
   }
 
   // 沒手動選類型時，依EIP總表類型帶預設，才不會因為忘了選就沒套到範本
@@ -3542,9 +3614,10 @@ async function generateAiReply() {
   $('reply-info').value = result.reply || '';
   result.commitMessage = withTicketPrefix(result.commitMessage, [state.currentTicket.id]);
   $('reply-commit-message').value = result.commitMessage;
-  const canCommit = mode === 'uncommitted' && !!result.commitMessage;
+  const canCommit = source.mode === 'uncommitted' && !!result.commitMessage;
   $('btn-do-git-commit').classList.toggle('hidden', !canCommit);
-  $('ai-status').textContent = `已產生(套用git路徑：${repoPathForStatus})，請自行確認/編輯後再送出${
+  const srcLabel = source.mode === 'none' ? `無程式碼異動${autoNone ? `(${autoNone}，已自動改用此模式)` : ''}` : `套用git路徑：${repoPathForStatus}`;
+  $('ai-status').textContent = `已產生(${srcLabel})，請自行確認/編輯後再送出${
     canCommit ? '；若要直接commit請按下方確認按鈕' : ''
   }。`;
 }
