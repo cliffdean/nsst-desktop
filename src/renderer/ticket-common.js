@@ -178,6 +178,25 @@ function statusBadge(ticket) {
   return `<span class="status-badge ${cls}">${escapeHtml(ticket.status_text || '')}</span>`;
 }
 
+// 緊急程度代碼：0最急(紅)、1次之(橘)、2一般(綠)，跟專案進度視窗的 SEV_COLOR 同一套
+function hasSeverity(ticket) {
+  return ticket && ticket.severity !== undefined && ticket.severity !== null && ticket.severity !== '';
+}
+
+function isUrgentTicket(ticket) {
+  return hasSeverity(ticket) && Number(ticket.severity) === 0;
+}
+
+function severityBadge(ticket) {
+  if (!hasSeverity(ticket)) return '';
+  const code = Number(ticket.severity);
+  const text = escapeHtml(ticket.severity_text || '');
+  if (code === 0) {
+    return `<span class="severity-badge severity-0" title="緊急程度：${text || '急'}">🔥 ${text || '急單'}</span>`;
+  }
+  return text ? `<span class="severity-badge severity-${code}" title="緊急程度">${text}</span>` : '';
+}
+
 // EIP單號顯示成 #000123 (補滿6碼)
 function formatTicketNo(id) {
   return `#${String(id).padStart(6, '0')}`;

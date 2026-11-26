@@ -2344,7 +2344,7 @@ function renderHistoryList() {
   }
   const cards = h.items.map((t) => `
       <div class="ticket-card ticket-history" data-id="${t.id}">
-        <div class="row1"><span>#${t.id} ${escapeHtml(t.project_name || t.name || '')}</span>${statusBadge(t)}</div>
+        <div class="row1"><span>#${t.id} ${escapeHtml(t.project_name || t.name || '')}</span>${severityBadge(t)}${statusBadge(t)}</div>
         <div class="summary">${escapeHtml(t.summary || '')}</div>
         <div class="meta">${t.created_at ? `建單：${escapeHtml(String(t.created_at).slice(0, 10))}　` : ''}${t.updated_at ? `最後更新：${escapeHtml(String(t.updated_at).slice(0, 16))}　` : ''}${t.version_text ? `版本：${escapeHtml(t.version_text)}` : ''}</div>
         <div class="card-actions-row">
@@ -2411,10 +2411,10 @@ function renderTicketList() {
     .map((t) => {
       const readonly = readonlyOf(t);
       return `
-      <div class="ticket-card ${t.pending_reply ? 'ticket-finished' : ticketDueClass(t)}" data-id="${t.id}">
+      <div class="ticket-card ${t.pending_reply ? 'ticket-finished' : ticketDueClass(t)}${isUrgentTicket(t) && !t.pending_reply ? ' ticket-urgent' : ''}" data-id="${t.id}">
         <div class="row1">
           ${readonly ? '' : `<label class="card-select"><input type="checkbox" class="chk-select" data-id="${t.id}" ${state.selectedIds.has(String(t.id)) ? 'checked' : ''} /></label>`}
-          <span>#${t.id} ${t.project_name || t.name || ''}</span>${statusBadge(t)}
+          <span>#${t.id} ${t.project_name || t.name || ''}</span>${severityBadge(t)}${statusBadge(t)}
         </div>
         <div class="summary">${t.summary || ''}</div>
         <div class="meta">${state.projectView && t.p_user_name ? `負責：${escapeHtml(t.p_user_name)}　` : ''}${t.created_at ? `建單：${escapeHtml(String(t.created_at).slice(0, 10))}　` : ''}開始：${t.start_time || '-'}　預定完成：${ticketDueValue(t) || '-'}${t.version_text ? `　版本：${escapeHtml(t.version_text)}` : ''}</div>

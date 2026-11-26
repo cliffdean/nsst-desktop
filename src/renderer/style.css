@@ -433,6 +433,23 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .ticket-card.ticket-due-soon { background: #fff9df; border-left-color: #d6a600; }
 .ticket-card .row1 { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
 .ticket-card .row1 .status-badge { margin-left: auto; }
+/* 緊急程度標籤：有標籤時由它往右推，狀態標籤緊貼在後 */
+.ticket-card .row1 .severity-badge { margin-left: auto; }
+.ticket-card .row1 .severity-badge + .status-badge { margin-left: 0; }
+.severity-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.severity-badge.severity-0 { background: #d93636; color: #fff; box-shadow: 0 0 0 2px rgba(217, 54, 54, 0.2); }
+.severity-badge.severity-1 { background: #fdf1e0; color: #b6720c; }
+.severity-badge.severity-2 { background: #eef1f6; color: #667; }
+/* 急單：整張卡片加粗紅色左框＋淡紅外框，在清單裡一眼就看得到 */
+.ticket-card.ticket-urgent { border-left: 6px solid #d93636; border-color: #f0b4b4; border-left-color: #d93636; }
+.ticket-card.ticket-urgent .summary { color: #222; font-weight: 600; }
 .card-select { display: inline-flex !important; margin: 0 !important; }
 .ticket-card .summary { color: #444; margin-top: 5px; line-height: 1.5; }
 .ticket-card .meta { color: #999; font-size: 11px; margin-top: 6px; }
