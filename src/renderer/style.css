@@ -565,6 +565,12 @@ fieldset { border: 1px solid #e2e5ea; border-radius: 4px; margin-top: 8px; }
 .ts-pagination button:disabled { opacity: 0.4; cursor: default; }
 
 .upload-box { margin: 10px 0; }
+#pending-files-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+#pending-files-list:empty { display: none; }
+.pending-file { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; max-width: 280px; }
+.pending-file img { width: 48px; height: 48px; object-fit: cover; border-radius: 3px; }
+.pending-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-file-remove { padding: 0 6px; line-height: 20px; min-width: 0; background: none; color: #c00; border: none; cursor: pointer; font-size: 14px; }
 #detail-attachments-list { margin-top: 4px; }
 .attachment-link {
   display: inline-block;

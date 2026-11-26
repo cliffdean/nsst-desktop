@@ -17,8 +17,9 @@ const state = {
   history: { userId: null, q: '', items: [], page: 0, total: 0, loading: false, loaded: false, seq: 0 }, // 歷史記錄分頁：不跟待辦清單混在一起，單獨分頁讀取
   viewUserId: null, // 左側清單目前在看哪位工程師的工單；null=自己(每次開App都從自己開始，不記憶)
   engineers: [],
-  pendingFileNames: [], // 對應pendingFileIds的檔名，顯示用
-  pendingFileIds: [],// 詳情頁「上傳並附加到工單」暫存的file id，等送出回覆時一起帶上去
+  // 詳情頁「上傳並附加到工單」暫存的檔案，等送出回覆時把 id 一起帶上去
+  // { id: file_id, names: [檔名], key: 防重複用(貼上=內容SHA-256、選檔=路徑), preview: 圖片縮圖objectURL或null }
+  pendingFiles: [],
   todos: [],
   starredProjects: new Set(), // 加星關注的專案id(字串)，存在EIP後端，全站共用(網頁端跟所有人的桌面工具同一批)
   advSearch: {
@@ -3110,21 +3111,78 @@ function renderAttachments(ticket) {
 async function pickAndUploadForDetail() {
   const filePaths = await call(window.api.dialog.pickFile());
   if (!filePaths) return;
-  await uploadForDetail(filePaths.map((p) => () => window.api.eip.uploadFile(p)));
+  await uploadForDetail(filePaths.map((p) => ({ key: 'path:' + p, preview: null, run: () => window.api.eip.uploadFile(p) })));
 }
 
-// 依序執行上傳(選檔與貼上共用)，成功的 file id 與檔名累加到待送出清單
-async function uploadForDetail(uploaders) {
-  for (let i = 0; i < uploaders.length; i++) {
-    $('pending-files-text').textContent = `上傳中... (${i + 1}/${uploaders.length})`;
-    const uploaded = await call(uploaders[i](), (err) => {
+// 依序執行上傳(選檔與貼上共用)，成功的檔案加進待送出清單。
+// 每個項目 { key, preview, run }：key 已在清單裡(或同一批重複)就略過，避免同一張圖貼好幾次
+async function uploadForDetail(items) {
+  const seen = new Set(state.pendingFiles.map((f) => f.key));
+  const todo = items.filter((item) => {
+    if (seen.has(item.key)) {
+      if (item.preview) URL.revokeObjectURL(item.preview);
+      return false;
+    }
+    seen.add(item.key);
+    return true;
+  });
+  const skipped = items.length - todo.length;
+  for (let i = 0; i < todo.length; i++) {
+    $('pending-files-text').textContent = `上傳中... (${i + 1}/${todo.length})`;
+    const uploaded = await call(todo[i].run(), (err) => {
       $('pending-files-text').textContent = '上傳失敗：' + err;
     });
-    if (!uploaded) return;
-    state.pendingFileIds.push(uploaded.file_id);
-    state.pendingFileNames.push(...uploaded.files.map((f) => f.original_filename));
+    if (!uploaded) {
+      todo.slice(i).forEach((item) => item.preview && URL.revokeObjectURL(item.preview));
+      return;
+    }
+    state.pendingFiles.push({
+      id: uploaded.file_id,
+      names: uploaded.files.map((f) => f.original_filename),
+      key: todo[i].key,
+      preview: todo[i].preview,
+    });
+    renderPendingFiles();
   }
-  $('pending-files-text').textContent = `已上傳待送出：${state.pendingFileNames.join('、')}(送出回覆時會一起附加)`;
+  renderPendingFiles(skipped ? `已略過 ${skipped} 個重複的檔案` : '');
+}
+
+// 待送出附件清單：每個檔案一列(圖片有縮圖)，可按 ✕ 從這次回覆移除
+function renderPendingFiles(note = '') {
+  const list = $('pending-files-list');
+  list.innerHTML = state.pendingFiles
+    .map(
+      (f, i) => `
+      <div class="pending-file" data-index="${i}">
+        ${f.preview ? `<img src="${escapeHtml(f.preview)}" alt="" />` : ''}
+        <span class="pending-file-name">${escapeHtml(f.names.join('、'))}</span>
+        <button type="button" class="pending-file-remove" title="移除這個附件">✕</button>
+      </div>`
+    )
+    .join('');
+  list.querySelectorAll('.pending-file-remove').forEach((btn) => {
+    btn.addEventListener('click', () => removePendingFile(Number(btn.closest('.pending-file').dataset.index)));
+  });
+  const base = state.pendingFiles.length ? `已上傳待送出 ${state.pendingFiles.length} 個(送出回覆時會一起附加)` : '';
+  $('pending-files-text').textContent = [base, note].filter(Boolean).join('；');
+}
+
+// 只是不附加到這次回覆；EIP 端已上傳的暫存檔沒有被引用就不會出現在工單上
+function removePendingFile(index) {
+  const [removed] = state.pendingFiles.splice(index, 1);
+  if (removed && removed.preview) URL.revokeObjectURL(removed.preview);
+  renderPendingFiles();
+}
+
+function clearPendingFiles() {
+  state.pendingFiles.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+  state.pendingFiles = [];
+  renderPendingFiles();
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // 在詳情頁按 Ctrl+V 貼上剪貼簿裡的圖片／檔案，直接上傳並暫存等送出回覆時附加
@@ -3134,12 +3192,20 @@ async function onDetailPaste(e) {
   if (!files.length) return; // 純文字照常貼進輸入框
   e.preventDefault();
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
-  const uploaders = files.map((f, i) => async () => {
-    const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-    const name = f.name && !/^image\.\w+$/i.test(f.name) ? f.name : `貼上圖片_${stamp}${files.length > 1 ? '_' + (i + 1) : ''}.${ext}`;
-    return window.api.eip.uploadData(new Uint8Array(await f.arrayBuffer()), name);
-  });
-  await uploadForDetail(uploaders);
+  // 先讀出內容算雜湊：同一張圖不論檔名都視為重複
+  const items = await Promise.all(
+    files.map(async (f, i) => {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+      const name = f.name && !/^image\.\w+$/i.test(f.name) ? f.name : `貼上圖片_${stamp}${files.length > 1 ? '_' + (i + 1) : ''}.${ext}`;
+      return {
+        key: 'sha256:' + (await sha256Hex(bytes)),
+        preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+        run: () => window.api.eip.uploadData(bytes, name),
+      };
+    })
+  );
+  await uploadForDetail(items);
 }
 
 function updateDetailTimerDisplay() {
@@ -3302,9 +3368,7 @@ async function openTicketDetail(id) {
   $('git-commits-list').innerHTML = '';
   $('btn-do-git-commit').classList.add('hidden');
   $('git-commit-status').textContent = '';
-  $('pending-files-text').textContent = '';
-  state.pendingFileIds = [];
-  state.pendingFileNames = [];
+  clearPendingFiles();
   renderAttachments(ticket);
   renderReplies(ticket);
 
@@ -3703,7 +3767,7 @@ async function submitReply() {
     info,
     status,
     transfer_to: transferTo,
-    fileid: state.pendingFileIds.join(','),
+    fileid: state.pendingFiles.map((f) => f.id).join(','),
     work_start_time: stopped ? stopped.firstStart : undefined,
     work_end_time: stopped ? stopped.lastEnd : undefined,
     actual_duration_seconds: stopped ? stopped.totalSeconds : undefined,
@@ -3714,8 +3778,7 @@ async function submitReply() {
   });
   if (!result) return;
 
-  state.pendingFileIds = [];
-  state.pendingFileNames = [];
+  clearPendingFiles();
   await window.api.timer.reset(state.currentTicket.id);
   delete state.timers[state.currentTicket.id];
   $('detail-message').textContent = '已送出，回到清單...';
