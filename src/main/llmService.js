@@ -56,7 +56,9 @@ ${diffText || '(無)'}`;
 
 // 範本裡「送QC/品保測試」這類日期只是範例格式，一律要求AI換成今天的實際日期，不要照抄或留占位文字給使用者填
 // 輸出語言：一律台灣繁體中文，避免模型(尤其是中文模型)飄成簡體
-const LANGUAGE_RULE = '【語言規定】reply與commitMessage內的中文一律使用「繁體中文(台灣用語)」，嚴禁出現任何簡體字(如：优化、修复、问题、检查、数据、导出)；程式碼、檔名、變數名稱與專有名詞維持原樣。';
+const LANGUAGE_RULE =
+  '【語言規定】reply與commitMessage內的中文一律使用「繁體中文(台灣用語)」，嚴禁出現任何簡體字(如：优化、修复、问题、检查、数据、导出)；程式碼、檔名、變數名稱與專有名詞維持原樣。\n' +
+  '【JSON格式規定】輸出必須是合法JSON：字串內的反斜線一律寫成「\\\\」(例如 use App\\\\User;)，換行寫成「\\n」，雙引號寫成「\\"」。';
 
 function buildTemplateBlock(templateText, todayDate, extraNote) {
   if (!templateText) return '';
@@ -168,18 +170,73 @@ function fixQcDate(reply) {
   return unwrapped.replace(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}(\s*送QC)/g, `${formatToday()}$1`);
 }
 
+// LLM輸出的JSON常見毛病：內容含PHP命名空間(use App\User;)或Windows路徑，反斜線沒跳脫成「\\」，
+// 導致「\U」這類非法跳脫讓JSON.parse失敗；或字串內直接放了實際換行/Tab。
+// 這裡逐字掃描，只在字串內修補：非法跳脫補成「\\」、控制字元轉成對應的跳脫寫法
+function repairJson(text) {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = text[i + 1];
+      if (next !== undefined && '"\\/bfnrt'.includes(next)) {
+        out += ch + next;
+        i++;
+      } else if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(text.slice(i + 2, i + 6))) {
+        out += text.slice(i, i + 6);
+        i += 5;
+      } else {
+        out += '\\\\';
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = false;
+      out += ch;
+      continue;
+    }
+    if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (ch === '\t') out += '\\t';
+    else if (ch < ' ') out += '';
+    else out += ch;
+  }
+  return out;
+}
+
+function tryParseJson(text) {
+  // 模型有時會在JSON前後多講幾句話，只取第一個「{」到最後一個「}」
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  const body = start >= 0 && end > start ? text.slice(start, end + 1) : text;
+  for (const candidate of [body, repairJson(body)]) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (e) {
+      // 換下一個候選
+    }
+  }
+  return null;
+}
+
 function parseResult(text, needCommitMessage = true) {
   const trimmed = text.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
-  try {
-    const parsed = JSON.parse(trimmed);
+  const parsed = tryParseJson(trimmed);
+  if (parsed) {
     return {
       reply: fixQcDate(parsed.reply || trimmed),
       commitMessage: needCommitMessage ? parsed.commitMessage || '' : '',
     };
-  } catch (e) {
-    // LLM沒有照格式回，就整段當作回覆內容，commit訊息留空讓使用者自己補
-    return { reply: fixQcDate(trimmed), commitMessage: '' };
   }
+  // LLM沒有照格式回，就整段當作回覆內容，commit訊息留空讓使用者自己補
+  return { reply: fixQcDate(trimmed), commitMessage: '' };
 }
 
 async function callLlm(prompt) {
