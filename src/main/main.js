@@ -263,7 +263,22 @@ app.on('web-contents-created', (_event, contents) => {
   });
 });
 
+// 只允許一個實例：主視窗預設隱藏在系統匣，重複啟動時不要再多開一份(看不到又會搶快捷鍵/MQTT埠)，
+// 而是把已經在跑的那份主視窗叫出來
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
 app.whenReady().then(() => {
+  if (!gotTheLock) return;
   Menu.setApplicationMenu(null); // 這是工具程式不是網頁瀏覽器，不需要File/Edit/View那排選單
   createWindow();
   createTray();
