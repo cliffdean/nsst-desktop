@@ -20,6 +20,34 @@ function formatDuration(durationSeconds) {
     : '未提供';
 }
 
+// diff總長有上限，但不能直接從頭截斷：檔案多時只會留下排在前面的幾個檔案(例如對講機相關)，
+// 後面真正跟工單有關的修改全被切掉，AI就只能依前面的檔案瞎寫。
+// 這裡把diff依檔案切開，用「平均分配、用不完的額度再分給其他檔案」的方式讓每個檔案都至少看得到開頭
+function fitDiff(diffText, budget) {
+  const text = diffText || '';
+  if (text.length <= budget) return text;
+  const chunks = text.split(/^(?=diff --git )/m).filter(Boolean);
+  const alloc = new Array(chunks.length).fill(0);
+  let remaining = budget;
+  let pending = chunks.map((_, i) => i);
+  while (pending.length && remaining > 0) {
+    const share = Math.floor(remaining / pending.length);
+    if (share <= 0) break;
+    const next = [];
+    for (const i of pending) {
+      const need = chunks[i].length - alloc[i];
+      const give = Math.min(need, share);
+      alloc[i] += give;
+      remaining -= give;
+      if (alloc[i] < chunks[i].length) next.push(i);
+    }
+    pending = next;
+  }
+  return chunks
+    .map((c, i) => (alloc[i] >= c.length ? c : c.slice(0, alloc[i]) + '\n...(此檔案diff過長，已節錄)\n'))
+    .join('');
+}
+
 // 兩種來源：commits=工單其實已經commit過了，選幾筆現有的commit來寫回覆(不需要再產生commit訊息);
 // uncommitted=目前工作區還沒commit的變更，這就是這次要做的內容，還需要生成commit訊息
 // 單張工單與批次工單共用同一套來源說明邏輯，只有前面包的工單資訊區塊不同
@@ -36,10 +64,13 @@ function buildSourceBlock(source) {
     sourceText =
       `【本次參考的git提交紀錄(已經commit過了，不需要再產生commit訊息，commitMessage請回空字串)】\n` +
       source.commits
-        .map((c, i) => `--- 提交${i + 1} (${c.hash.slice(0, 7)}) ---\n訊息：${c.message}\ndiff(節錄)：\n${(c.diff || '').slice(0, 4000)}`)
+        .map((c, i) => `--- 提交${i + 1} (${c.hash.slice(0, 7)}) ---\n訊息：${c.message}\ndiff(節錄)：\n${fitDiff(c.diff, 6000)}`)
         .join('\n\n');
   } else {
-    const diffText = [source.diffStaged, source.diffUnstaged].filter(Boolean).join('\n').slice(0, 8000);
+    const diffText = fitDiff(
+      [source.diffStaged, source.diffUnstaged, source.diffUntracked].filter(Boolean).join('\n'),
+      16000
+    );
     const commitsText = (source.commitsSince || []).map((c) => `- ${c.message}`).join('\n');
     sourceText = `【目前git分支】${source.branch}
 【變更的檔案】
@@ -107,7 +138,9 @@ ${
 1. 先依工單標題與需求說明判斷範圍，只挑出與這張工單直接相關的檔案與異動來說明；
 2. 與這張工單無關的異動(其他功能、其他工單、順手修改)一律不要寫進reply，也不要提到有其他異動；
 3. 說明內容必須以git實際修改為依據(改了哪些檔案、邏輯)，不可憑空捏造沒有改過的內容；
-4. 若git異動裡完全找不到與這張工單相關的內容，請在reply如實說明「本次提交未包含此工單相關異動」，不要硬湊。`
+4. 若git異動裡完全找不到與這張工單相關的內容，請在reply如實說明「本次提交未包含此工單相關異動」，不要硬湊；
+5. 「根因／問題描述」要以工單需求說明為準(工單內已寫明檢測結果或原因時，必須依工單的說法歸納)，不可只憑某一個檔案的diff自行推論出另一個原因；
+6. 「處理方式」要涵蓋所有與工單相關的檔案異動，不要只描述diff中排在前面或篇幅最大的某一部分。`
   }
 ${LANGUAGE_RULE}
 請用以下JSON格式回覆，不要加其他說明文字、不要用markdown code block包起來：

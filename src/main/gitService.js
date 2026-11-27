@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const simpleGit = require('simple-git');
 const { settingsStore } = require('./store');
 
@@ -40,8 +42,34 @@ async function collectChanges(sinceIso, projectId) {
     changedFiles: status.files.map((f) => f.path),
     diffStaged,
     diffUnstaged,
+    // git diff不會包含尚未加入git的新檔案(例如新增的類別/服務)，要另外讀內容，不然AI完全看不到
+    diffUntracked: readUntrackedFiles(repoPath, status.not_added || []),
     commitsSince: log,
   };
+}
+
+const UNTRACKED_MAX_FILES = 20;
+const UNTRACKED_MAX_BYTES = 200 * 1024;
+
+// 把未追蹤的新檔案包成類似diff的格式，二進位或過大的檔案只列檔名
+function readUntrackedFiles(repoPath, files) {
+  return files
+    .slice(0, UNTRACKED_MAX_FILES)
+    .map((file) => {
+      const header = `diff --git a/${file} b/${file}\nnew file (尚未加入git)\n`;
+      try {
+        const full = path.join(repoPath, file);
+        const stat = fs.statSync(full);
+        if (!stat.isFile()) return header;
+        if (stat.size > UNTRACKED_MAX_BYTES) return header + '(檔案過大，略過內容)\n';
+        const content = fs.readFileSync(full);
+        if (content.includes(0)) return header + '(二進位檔，略過內容)\n';
+        return header + content.toString('utf8').split('\n').map((l) => '+' + l).join('\n') + '\n';
+      } catch (e) {
+        return header + `(讀取失敗：${e.message})\n`;
+      }
+    })
+    .join('');
 }
 
 // 列出近期提交紀錄，給使用者勾選「工單其實已經commit過了，要用哪幾筆」
